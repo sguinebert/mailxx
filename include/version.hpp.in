@@ -1,0 +1,3 @@
+#define mailxx_VERSION_MAJOR @mailxx_VERSION_MAJOR@
+#define mailxx_VERSION_MINOR @mailxx_VERSION_MINOR@
+#define mailxx_VERSION_PATCH @mailxx_VERSION_PATCH@
