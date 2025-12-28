@@ -17,6 +17,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <vector>
 #include <boost/algorithm/string/trim.hpp>
 #include <mailxx/codec/codec.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/export.hpp>
 
 
@@ -62,7 +63,7 @@ public:
     @return            Vector of seven bit encoded strings.
     @throw codec_error Bad character.
     **/
-    std::vector<std::string> encode(const std::string& text) const
+    result<std::vector<std::string>> encode(const std::string& text) const
     {
         std::vector<std::string> enc_text;
         std::string line;
@@ -107,7 +108,12 @@ public:
                 ch++;
             }
             else
-                throw codec_error("Bad character `" + std::string(1, *ch) + "`.");
+            {
+                std::string detail = "bad character `";
+                detail += *ch;
+                detail += "`";
+                return fail<std::vector<std::string>>(errc::codec_invalid_input, "invalid 7bit input", std::move(detail));
+            }
 
             if (line_len == policy)
                 add_new_line(is_folding, line);
@@ -117,7 +123,7 @@ public:
         while (!enc_text.empty() && enc_text.back().empty())
             enc_text.pop_back();
 
-        return enc_text;
+        return ok(std::move(enc_text));
     }
 
     /**
@@ -128,18 +134,23 @@ public:
     @throw codec_error Line policy overflow.
     @throw codec_error Bad character.
     **/
-    std::string decode(const std::vector<std::string>& text) const
+    result<std::string> decode(const std::vector<std::string>& text) const
     {
         std::string dec_text;
         for (const auto& line : text)
         {
             if (line.length() > lines_policy_)
-                throw codec_error("Line policy overflow.");
+                return fail<std::string>(errc::codec_invalid_input, "invalid 7bit input", "line policy overflow");
 
             for (auto ch : line)
             {
                 if (!is_allowed(ch))
-                    throw codec_error("Bad character `" + std::string(1, ch) + "`.");
+                {
+                    std::string detail = "bad character `";
+                    detail += ch;
+                    detail += "`";
+                    return fail<std::string>(errc::codec_invalid_input, "invalid 7bit input", std::move(detail));
+                }
 
                 dec_text += ch;
             }
@@ -147,7 +158,7 @@ public:
         }
         boost::trim_right(dec_text);
 
-        return dec_text;
+        return ok(std::move(dec_text));
     }
 
 private:

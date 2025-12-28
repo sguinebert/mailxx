@@ -24,6 +24,7 @@ set(mailxx_MODULE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/mailxx.net.cppm
     ${CMAKE_CURRENT_SOURCE_DIR}/mailxx.mime.cppm
     ${CMAKE_CURRENT_SOURCE_DIR}/mailxx.smtp.cppm
+    ${CMAKE_CURRENT_SOURCE_DIR}/mailxx.pool.cppm
     ${CMAKE_CURRENT_SOURCE_DIR}/mailxx.pop3.cppm
     ${CMAKE_CURRENT_SOURCE_DIR}/mailxx.imap.cppm
     ${CMAKE_CURRENT_SOURCE_DIR}/mailxx.cppm

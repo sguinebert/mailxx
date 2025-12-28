@@ -16,7 +16,9 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <mailxx/codec/base64.hpp>
+#include <mailxx/detail/result.hpp>
 
 namespace mailxx::sasl
 {
@@ -28,7 +30,7 @@ namespace detail
  * Remove CR/LF characters from base64 encoded string.
  * Base64 encoders may add line breaks which break SASL auth.
  */
-inline std::string strip_newlines(const std::string& encoded)
+inline std::string strip_newlines(std::string_view encoded)
 {
     std::string result;
     result.reserve(encoded.size());
@@ -43,18 +45,17 @@ inline std::string strip_newlines(const std::string& encoded)
 /**
  * Base64 encode without line breaks.
  * Uses NONE policy to avoid line wrapping, then strips any remaining newlines.
+ * Returns error info on invalid base64 input.
  */
-inline std::string base64_encode_single_line(const std::string& input)
+inline result<std::string> base64_encode_single_line(std::string_view input)
 {
     // Use maximum line length to avoid wrapping
     base64 b64(static_cast<std::string::size_type>(codec::line_len_policy_t::NONE),
                static_cast<std::string::size_type>(codec::line_len_policy_t::NONE));
-    auto encoded_lines = b64.encode(input);
-    // Join all lines without newlines
-    std::string result;
-    for (const auto& line : encoded_lines)
-        result += line;
-    return result;
+    auto encoded = b64.encode(input);
+    if (!encoded)
+        return encoded;
+    return ok(strip_newlines(*encoded));
 }
 
 } // namespace detail
@@ -65,9 +66,9 @@ inline std::string base64_encode_single_line(const std::string& input)
  * 
  * @param username The username/email
  * @param password The password
- * @return Base64 encoded PLAIN credentials
+ * @return Result with base64 encoded PLAIN credentials
  */
-inline std::string encode_plain(const std::string& username, const std::string& password)
+inline result<std::string> encode_plain(std::string_view username, std::string_view password)
 {
     std::string plain;
     plain.reserve(2 + username.size() + password.size());
@@ -84,9 +85,9 @@ inline std::string encode_plain(const std::string& username, const std::string& 
  * Returns base64 encoded text (username or password separately).
  * 
  * @param text The text to encode (username or password)
- * @return Base64 encoded text
+ * @return Result with base64 encoded text
  */
-inline std::string encode_login(const std::string& text)
+inline result<std::string> encode_login(std::string_view text)
 {
     return detail::base64_encode_single_line(text);
 }
@@ -97,9 +98,9 @@ inline std::string encode_login(const std::string& text)
  * 
  * @param username The email address
  * @param access_token The OAuth2 access token
- * @return Base64 encoded XOAUTH2 string
+ * @return Result with base64 encoded XOAUTH2 string
  */
-inline std::string encode_xoauth2(const std::string& username, const std::string& access_token)
+inline result<std::string> encode_xoauth2(std::string_view username, std::string_view access_token)
 {
     std::string xoauth2;
     xoauth2.reserve(5 + username.size() + 13 + access_token.size() + 2);
@@ -119,9 +120,9 @@ inline std::string encode_xoauth2(const std::string& username, const std::string
  * 
  * @param username The email address
  * @param access_token The OAuth2 access token
- * @return Base64 encoded OAUTHBEARER string
+ * @return Result with base64 encoded OAUTHBEARER string
  */
-inline std::string encode_oauthbearer(const std::string& username, const std::string& access_token)
+inline result<std::string> encode_oauthbearer(std::string_view username, std::string_view access_token)
 {
     std::string bearer;
     bearer.reserve(4 + username.size() + 14 + access_token.size() + 2);

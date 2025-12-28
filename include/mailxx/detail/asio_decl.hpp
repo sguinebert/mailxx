@@ -49,6 +49,7 @@ namespace mailxx::asio
     using ::asio::any_io_executor;
     using ::asio::steady_timer;
     using ::asio::streambuf;
+    namespace experimental = ::asio::experimental;
     
     // IP networking
     namespace ip = ::asio::ip;
@@ -119,6 +120,7 @@ namespace mailxx::asio
     using boost::asio::steady_timer;
     using boost::asio::redirect_error;
     using boost::asio::streambuf;
+    namespace experimental = boost::asio::experimental;
     
     // IP networking
     namespace ip = boost::asio::ip;

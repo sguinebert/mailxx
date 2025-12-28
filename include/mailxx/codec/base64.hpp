@@ -19,9 +19,15 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #endif
 
 #include <string>
+#include <string_view>
 #include <vector>
 #include <cctype>
 #include <mailxx/codec/codec.hpp>
+#include <mailxx/config.hpp>
+#if MAILXX_THROWING_ENABLED
+#include <mailxx/throwing.hpp>
+#endif
+#include <mailxx/detail/result.hpp>
 #include <mailxx/export.hpp>
 
 
@@ -160,42 +166,64 @@ public:
     }
 
     /**
+    Encoding a string into Base64 encoded string by applying the line policy.
+
+    @param text String to encode.
+    @return     Encoded string or error info.
+    **/
+    [[nodiscard]] result<std::string> encode(std::string_view text) const
+    {
+        std::string input(text);
+        std::vector<std::string> enc_text = encode(input);
+        return ok(join_lines(enc_text));
+    }
+
+    /**
     Decoding a vector of Base64 encoded strings to string by applying the line policy.
 
-    @param text        Vector of Base64 encoded strings.
-    @return            Decoded string.
-    @throw codec_error Bad character.
-    @todo              Line policy not verified.
+    @param text Vector of Base64 encoded strings.
+    @return     Decoded string or error info.
+    @todo       Line policy not verified.
     **/
-    std::string decode(const std::vector<std::string>& text) const
+    [[nodiscard]] result<std::string> decode(const std::vector<std::string>& text) const
     {
         std::string dec_text;
         unsigned char sextets[SEXTETS_NO];
         unsigned char octets[OCTETS_NO];
         int count_4_chars = 0;
 
+        auto fail_invalid = [](std::string detail) -> result<std::string>
+        {
+            return fail<std::string>(errc::codec_invalid_input, "invalid base64", std::move(detail));
+        };
+
         for (const auto& line : text)
         {
             if (line.length() > lines_policy_)
-                throw codec_error("Bad line policy.");
+                return fail_invalid("bad line policy");
 
             for (std::string::size_type ch = 0; ch < line.length() && line[ch] != EQUAL_CHAR; ch++)
             {
                 if (!is_allowed(line[ch]))
-                    throw codec_error("Bad character `" + std::string(1, line[ch]) + "`.");
+                    return fail_invalid("bad character `" + std::string(1, line[ch]) + "`");
 
-                sextets[count_4_chars++] = line[ch];
+                sextets[count_4_chars++] = static_cast<unsigned char>(line[ch]);
                 if (count_4_chars == SEXTETS_NO)
                 {
                     for (int i = 0; i < SEXTETS_NO; i++)
-                        sextets[i] = static_cast<unsigned char>(CHARSET.find(sextets[i]));
+                    {
+                        const std::size_t pos = CHARSET.find(static_cast<char>(sextets[i]));
+                        if (pos == std::string::npos)
+                            return fail_invalid("bad character `" + std::string(1, static_cast<char>(sextets[i])) + "`");
+                        sextets[i] = static_cast<unsigned char>(pos);
+                    }
 
                     octets[0] = (sextets[0] << 2) + ((sextets[1] & 0x30) >> 4);
                     octets[1] = ((sextets[1] & 0xf) << 4) + ((sextets[2] & 0x3c) >> 2);
                     octets[2] = ((sextets[2] & 0x3) << 6) + sextets[3];
 
                     for (int i = 0; i < OCTETS_NO; i++)
-                        dec_text += octets[i];
+                        dec_text += static_cast<char>(octets[i]);
                     count_4_chars = 0;
                 }
             }
@@ -208,35 +236,106 @@ public:
                     sextets[i] = '\0';
 
                 for (int i = 0; i < SEXTETS_NO; i++)
-                    sextets[i] = static_cast<unsigned char>(CHARSET.find(sextets[i]));
+                {
+                    if (sextets[i] == '\0')
+                    {
+                        sextets[i] = 0;
+                        continue;
+                    }
+                    const std::size_t pos = CHARSET.find(static_cast<char>(sextets[i]));
+                    if (pos == std::string::npos)
+                        return fail_invalid("bad character `" + std::string(1, static_cast<char>(sextets[i])) + "`");
+                    sextets[i] = static_cast<unsigned char>(pos);
+                }
 
                 octets[0] = (sextets[0] << 2) + ((sextets[1] & 0x30) >> 4);
                 octets[1] = ((sextets[1] & 0xf) << 4) + ((sextets[2] & 0x3c) >> 2);
                 octets[2] = ((sextets[2] & 0x3) << 6) + sextets[3];
 
                 for (int i = 0; i < count_4_chars - 1; i++)
-                    dec_text += octets[i];
+                    dec_text += static_cast<char>(octets[i]);
+                count_4_chars = 0;
             }
         }
 
-        return dec_text;
+        return ok(std::move(dec_text));
     }
 
     /**
     Decoding a Base64 string to a string.
 
     @param text Base64 encoded string.
-    @return     Encoded string.
-    @throw *    `decode(const std::vector<std::string>&)`.
+    @return     Decoded string or error info.
     **/
-    std::string decode(const std::string& text) const
+    [[nodiscard]] result<std::string> decode(std::string_view text) const
     {
-        std::vector<std::string> v;
-        v.push_back(text);
-        return decode(v);
+        std::vector<std::string> lines;
+        std::string current;
+        current.reserve(text.size());
+        for (std::string::size_type i = 0; i < text.size(); ++i)
+        {
+            const char ch = text[i];
+            if (ch == CR_CHAR || ch == LF_CHAR)
+            {
+                lines.push_back(current);
+                current.clear();
+                if (ch == CR_CHAR && i + 1 < text.size() && text[i + 1] == LF_CHAR)
+                    ++i;
+                continue;
+            }
+            current.push_back(ch);
+        }
+        lines.push_back(current);
+        return decode(lines);
     }
 
+    /**
+    Decoding a Base64 string to a string and throwing on error.
+
+    @param text Base64 encoded string.
+    @return     Decoded string.
+    @throw      codec_error on invalid base64 input.
+    **/
+    #if MAILXX_THROWING_ENABLED
+    std::string decode_or_throw(std::string_view text) const
+    {
+        return mailxx::unwrap(decode(text));
+    }
+    #endif
+
+    /**
+    Decoding a vector of Base64 encoded strings and throwing on error.
+
+    @param text Vector of Base64 encoded strings.
+    @return     Decoded string.
+    @throw      codec_error on invalid base64 input.
+    **/
+    #if MAILXX_THROWING_ENABLED
+    std::string decode_or_throw(const std::vector<std::string>& text) const
+    {
+        return mailxx::unwrap(decode(text));
+    }
+    #endif
+
 private:
+    static std::string join_lines(const std::vector<std::string>& lines)
+    {
+        if (lines.empty())
+            return {};
+        std::string out;
+        std::size_t total = 0;
+        for (const auto& line : lines)
+            total += line.size();
+        total += (lines.size() - 1) * END_OF_LINE.size();
+        out.reserve(total);
+        for (std::size_t i = 0; i < lines.size(); ++i)
+        {
+            out += lines[i];
+            if (i + 1 < lines.size())
+                out += END_OF_LINE;
+        }
+        return out;
+    }
 
     /**
     Checking if the given character is in the base64 character set.

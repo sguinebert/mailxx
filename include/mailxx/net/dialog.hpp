@@ -22,8 +22,10 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <atomic>
 #include <utility>
 #include <mailxx/detail/asio_decl.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/detail/log.hpp>
 #include <mailxx/detail/redact.hpp>
+#include <mailxx/net/error_mapping.hpp>
 
 namespace mailxx
 {
@@ -87,6 +89,12 @@ public:
         redact_secrets_in_trace_ = enabled;
     }
 
+    void set_peer(std::string_view host, std::string_view service)
+    {
+        peer_host_.assign(host.begin(), host.end());
+        peer_service_.assign(service.begin(), service.end());
+    }
+
     /**
     Sending a line to network asynchronously.
 
@@ -105,6 +113,21 @@ public:
             }, std::forward<CompletionToken>(token));
     }
 
+    [[nodiscard]] awaitable<mailxx::result<void>> write_line_r(std::string_view line)
+    {
+        auto [ec, bytes] = co_await write_line(line, use_nothrow_awaitable);
+        (void)bytes;
+        const bool timeout_triggered = (ec == asio::error::timed_out);
+        if (ec)
+        {
+            const errc code = map_net_error(io_stage::write, ec, timeout_triggered);
+            auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::write, "write_line");
+            detail.add("sys", format_sys(ec));
+            co_return mailxx::fail<void>(code, "net write failed", std::move(detail), ec);
+        }
+        co_return mailxx::ok();
+    }
+
     /**
     Writing raw buffers to network asynchronously.
 
@@ -119,6 +142,22 @@ public:
             {
                 asio::async_write(stream_, buffers, std::move(handler));
             }, std::forward<CompletionToken>(token));
+    }
+
+    template<typename ConstBufferSequence>
+    [[nodiscard]] awaitable<mailxx::result<void>> write_raw_r(const ConstBufferSequence& buffers)
+    {
+        auto [ec, bytes] = co_await write_raw(buffers, use_nothrow_awaitable);
+        (void)bytes;
+        const bool timeout_triggered = (ec == asio::error::timed_out);
+        if (ec)
+        {
+            const errc code = map_net_error(io_stage::write, ec, timeout_triggered);
+            auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::write, "write_raw");
+            detail.add("sys", format_sys(ec));
+            co_return mailxx::fail<void>(code, "net write failed", std::move(detail), ec);
+        }
+        co_return mailxx::ok();
     }
 
     /**
@@ -187,6 +226,20 @@ public:
             }, token, stream_);
     }
 
+    [[nodiscard]] awaitable<mailxx::result<std::string>> read_line_r()
+    {
+        auto [ec, line] = co_await read_line(use_nothrow_awaitable);
+        const bool timeout_triggered = (ec == asio::error::timed_out);
+        if (ec)
+        {
+            const errc code = map_net_error(io_stage::read, ec, timeout_triggered);
+            auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::read, "read_line");
+            detail.add("sys", format_sys(ec));
+            co_return mailxx::fail<std::string>(code, "net read failed", std::move(detail), ec);
+        }
+        co_return mailxx::ok(std::move(line));
+    }
+
     /**
     Receiving exactly N bytes from network asynchronously.
 
@@ -240,6 +293,20 @@ public:
                 MAILXX_TRACE_RECV("NET", out);
                 self.complete(ec, std::move(out));
             }, token, stream_);
+    }
+
+    [[nodiscard]] awaitable<mailxx::result<std::string>> read_exactly_r(std::size_t n)
+    {
+        auto [ec, out] = co_await read_exactly(n, use_nothrow_awaitable);
+        const bool timeout_triggered = (ec == asio::error::timed_out);
+        if (ec)
+        {
+            const errc code = map_net_error(io_stage::read, ec, timeout_triggered);
+            auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::read, "read_exactly");
+            detail.add("sys", format_sys(ec));
+            co_return mailxx::fail<std::string>(code, "net read failed", std::move(detail), ec);
+        }
+        co_return mailxx::ok(std::move(out));
     }
 
     template<typename Signature, typename Initiation, typename CompletionToken>
@@ -335,6 +402,8 @@ protected:
     std::size_t max_line_length_;
     std::optional<duration> timeout_;
 
+    std::string peer_host_;
+    std::string peer_service_;
     std::string trace_protocol_{"NET"};
     bool redact_secrets_in_trace_{true};
 
@@ -349,6 +418,33 @@ protected:
             return;
         }
         logger.trace_protocol(trace_protocol_, dir, data);
+    }
+
+    [[nodiscard]] static std::string format_sys(const asio::error_code& ec)
+    {
+        std::string sys = ec.message();
+        if (!sys.empty())
+        {
+            sys += " (";
+            sys += std::to_string(ec.value());
+            sys += ")";
+        }
+        else
+        {
+            sys = std::to_string(ec.value());
+        }
+        return sys;
+    }
+
+    [[nodiscard]] error_info make_net_error(
+        const asio::error_code& ec,
+        std::source_location where = std::source_location::current()) const
+    {
+        const bool timeout_triggered = (ec == asio::error::timed_out);
+        const errc code = map_net_error(io_stage::read, ec, timeout_triggered);
+        auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::read, "generic");
+        detail.add("sys", format_sys(ec));
+        return mailxx::make_error(code, std::string(mailxx::to_string(code)), std::move(detail), ec, where);
     }
 };
 

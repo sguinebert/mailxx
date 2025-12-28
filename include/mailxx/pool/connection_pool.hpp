@@ -19,6 +19,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <atomic>
 #include <mutex>
 #include <stdexcept>
+#include <variant>
 #include <mailxx/detail/asio_decl.hpp>
 #include <mailxx/detail/log.hpp>
 #include <mailxx/pool/pool_config.hpp>
@@ -132,20 +133,22 @@ public:
     /// Explicitly release back to pool (normally done by destructor)
     void release()
     {
-        if (pool_ && client_)
+        if (client_)
         {
             metadata_.mark_used();
-            pool_->return_connection(std::move(client_), std::move(metadata_), valid_);
-            pool_ = nullptr;
+            if (auto pool = pool_.lock())
+            {
+                pool->return_connection(std::move(client_), std::move(metadata_), valid_);
+            }
+            client_.reset();
         }
-        client_.reset();
         valid_ = false;
     }
     
 private:
     friend class connection_pool<Client>;
     
-    pooled_connection(std::unique_ptr<Client> client, connection_metadata meta, pool_type* pool)
+    pooled_connection(std::unique_ptr<Client> client, connection_metadata meta, std::weak_ptr<pool_type> pool)
         : client_(std::move(client))
         , metadata_(std::move(meta))
         , pool_(pool)
@@ -155,7 +158,7 @@ private:
     
     std::unique_ptr<Client> client_;
     connection_metadata metadata_;
-    pool_type* pool_ = nullptr;
+    std::weak_ptr<pool_type> pool_;
     bool valid_ = false;
 };
 
@@ -394,6 +397,7 @@ private:
     
     awaitable<pooled_type> acquire_impl()
     {
+        auto self = this->shared_from_this();
         // Try to get an existing connection
         while (true)
         {
@@ -465,7 +469,7 @@ private:
                     ++stats_.in_use_connections;
                 }
                 
-                co_return pooled_type(std::move(client), std::move(metadata), this);
+                co_return pooled_type(std::move(client), std::move(metadata), self);
             }
             
             // No idle connection available, try to create new one
@@ -488,7 +492,7 @@ private:
                         ++stats_.in_use_connections;
                     }
                     
-                    co_return pooled_type(std::move(client), connection_metadata{}, this);
+                    co_return pooled_type(std::move(client), connection_metadata{}, self);
                 }
                 catch (const std::exception& e)
                 {
@@ -501,52 +505,37 @@ private:
                 }
             }
             
-            // Pool is at capacity, wait for a connection to be returned
+            // Pool is at capacity, wait for a connection to be returned via channel
             MAILXX_LOG_DEBUG("POOL", "Pool at capacity, waiting for connection...");
-            
-            // Use timeout
+
             steady_timer timer(executor_);
             timer.expires_after(config_.acquire_timeout);
-            
-            // Wait with timeout
-            bool got_signal = false;
-            
-            // Simple polling approach (channel would be better but keeping it simple)
-            auto deadline = std::chrono::steady_clock::now() + config_.acquire_timeout;
-            while (std::chrono::steady_clock::now() < deadline)
+
+            using namespace mailxx::asio::experimental::awaitable_operators;
+            auto timer_wait = timer.async_wait(use_nothrow_awaitable);
+            auto recv_wait = channel_.async_receive(use_nothrow_awaitable);
+
+            auto res = co_await (std::move(timer_wait) || std::move(recv_wait));
+
+            if (std::holds_alternative<std::tuple<mailxx::asio::error_code>>(res))
             {
-                {
-                    std::lock_guard lock(pool_mutex_);
-                    if (!idle_connections_.empty())
-                    {
-                        got_signal = true;
-                        break;
-                    }
-                }
-                
-                // Check if we can create now
-                {
-                    std::lock_guard lock(stats_mutex_);
-                    if (stats_.total_connections < config_.max_connections)
-                    {
-                        got_signal = true;
-                        break;
-                    }
-                }
-                
-                // Short sleep to avoid busy loop
-                steady_timer wait_timer(executor_);
-                wait_timer.expires_after(std::chrono::milliseconds{10});
-                co_await wait_timer.async_wait(use_awaitable);
-            }
-            
-            if (!got_signal)
-            {
+                // Timer finished first
                 std::lock_guard lock(stats_mutex_);
                 ++stats_.acquisitions_timeout;
                 throw pool_timeout_error();
             }
-            
+            else
+            {
+                auto [ec, /*msg*/] = std::get<1>(res);
+                if (ec)
+                {
+                    if (ec == mailxx::asio::error::operation_aborted)
+                        continue;
+                    if (shutdown_.load(std::memory_order_acquire))
+                        throw pool_error("Pool is shutting down");
+                    continue;
+                }
+            }
             // Loop back and try again
         }
     }
@@ -599,6 +588,8 @@ private:
                 ++stats_.idle_connections;
                 ++stats_.connections_created;
             }
+
+            (void)channel_.try_send(mailxx::asio::error_code{});
         }
         catch (const std::exception& e)
         {
@@ -674,6 +665,9 @@ private:
             std::lock_guard lock(stats_mutex_);
             ++stats_.idle_connections;
         }
+
+        // Notify waiters
+        (void)channel_.try_send(mailxx::asio::error_code{});
     }
     
     any_io_executor executor_;
@@ -682,7 +676,7 @@ private:
     validator_type validator_;
     
     // Channel for signaling (using Asio experimental channel)
-    experimental::channel<void(asio::error_code)> channel_;
+    mailxx::asio::experimental::channel<void(mailxx::asio::error_code)> channel_;
     
     // Connection storage
     mutable std::mutex pool_mutex_;

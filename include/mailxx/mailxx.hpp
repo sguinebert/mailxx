@@ -28,6 +28,8 @@
 #include <mailxx/smtp/types.hpp>
 #include <mailxx/smtp/error.hpp>
 #include <mailxx/smtp/client.hpp>
+#include <mailxx/storage/maildir.hpp>
+#include <mailxx/storage/mbox.hpp>
 
 // Utilities
 #include <mailxx/detail/timeout_config.hpp>

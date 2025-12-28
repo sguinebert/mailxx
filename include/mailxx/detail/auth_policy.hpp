@@ -13,22 +13,25 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #pragma once
 
 #include <mailxx/detail/log.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/net/dialog.hpp>
 
 namespace mailxx::detail
 {
 
-template <typename Error = mailxx::net::dialog_error, typename Options>
-inline void ensure_auth_allowed(bool is_tls, const Options& options)
+template <typename Options>
+inline mailxx::result<void> ensure_auth_allowed(bool is_tls, const Options& options, errc code)
 {
     if (is_tls || !options.require_tls_for_auth)
-        return;
+        return mailxx::ok();
     if (options.allow_cleartext_auth)
     {
         MAILXX_WARN("AUTH without TLS allowed by configuration.");
-        return;
+        return mailxx::ok();
     }
-    throw Error("TLS required for authentication; call start_tls() or use tls_mode::implicit", "");
+    return mailxx::fail<void>(
+        code,
+        "TLS required for authentication; call start_tls() or use tls_mode::implicit");
 }
 
 } // namespace mailxx::detail

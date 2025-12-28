@@ -25,6 +25,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/codec/base64.hpp>
 #include <mailxx/codec/quoted_printable.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/export.hpp>
 
 
@@ -77,7 +78,7 @@ public:
     @todo          Merge text and charset into a single parameter of type `string_t`.
     @todo          It must take another parameter for the header name length in order to remove the hardcoded constant.
     **/
-    std::vector<std::string> encode(const std::string& text, const std::string& charset, codec_t method) const
+    result<std::vector<std::string>> encode(const std::string& text, const std::string& charset, codec_t method) const
     {
         // TODO: The constant has to depend of the header length.
         const std::string::size_type Q_FLAGS_LEN = 12;
@@ -94,16 +95,19 @@ public:
             codec_flag = QP_CODEC_STR;
             quoted_printable qp(line1_policy_ - Q_FLAGS_LEN, lines_policy_ - Q_FLAGS_LEN);
             qp.q_codec_mode(true);
-            text_c = qp.encode(text);
+            auto enc_res = qp.encode(text);
+            if (!enc_res)
+                return fail<std::vector<std::string>>(std::move(enc_res).error());
+            text_c = std::move(*enc_res);
         }
         else
-            throw codec_error("Bad encoding method.");
+            return fail<std::vector<std::string>>(errc::codec_invalid_input, "invalid Q encoding method");
 
         // TODO: Name the magic constant for Q delimiters.
         for (auto s = text_c.begin(); s != text_c.end(); s++)
             enc_text.push_back("=?" + boost::to_upper_copy(charset) + "?" + codec_flag + "?" + *s + "?=");
 
-        return enc_text;
+        return ok(std::move(enc_text));
     }
 
     /**
@@ -115,22 +119,26 @@ public:
     @throw codec_error Missing Q codec separator for codec type.
     @throw codec_error Missing last Q codec separator.
     @throw codec_error Bad encoding method.
-    @throw *           `decode_qp(const string&)`, `base64::decode(const string&)`.
+    @throw *           `decode_qp(const string&)`.
     **/
-    std::tuple<std::string, std::string, codec_t> decode(const std::string& text) const
+    result<std::tuple<std::string, std::string, codec_t>> decode(const std::string& text) const
     {
         std::string::size_type charset_pos = text.find(QUESTION_MARK_CHAR);
         if (charset_pos == std::string::npos)
-            throw codec_error("Missing Q codec separator for charset.");
+            return fail<std::tuple<std::string, std::string, codec_t>>(errc::codec_invalid_input,
+                "invalid Q encoding", "missing charset separator");
         std::string::size_type method_pos = text.find(QUESTION_MARK_CHAR, charset_pos + 1);
         if (method_pos == std::string::npos)
-            throw codec_error("Missing Q codec separator for codec type.");
+            return fail<std::tuple<std::string, std::string, codec_t>>(errc::codec_invalid_input,
+                "invalid Q encoding", "missing codec type separator");
         std::string charset = boost::to_upper_copy(text.substr(charset_pos + 1, method_pos - charset_pos - 1));
         if (charset.empty())
-            throw codec_error("Missing Q codec charset.");
+            return fail<std::tuple<std::string, std::string, codec_t>>(errc::codec_invalid_input,
+                "invalid Q encoding", "missing charset");
         std::string::size_type content_pos = text.find(QUESTION_MARK_CHAR, method_pos + 1);
         if (content_pos == std::string::npos)
-            throw codec_error("Missing last Q codec separator.");
+            return fail<std::tuple<std::string, std::string, codec_t>>(errc::codec_invalid_input,
+                "invalid Q encoding", "missing content separator");
         std::string method = text.substr(method_pos + 1, content_pos - method_pos - 1);
         codec_t method_type;
         std::string text_c = text.substr(content_pos + 1);
@@ -139,18 +147,29 @@ public:
         if (boost::iequals(method, BASE64_CODEC_STR))
         {
             base64 b64(line1_policy_, lines_policy_);
-            dec_text = b64.decode(text_c);
+            auto decoded = b64.decode(text_c);
+            if (!decoded)
+            {
+                std::string detail = format_codec_error(decoded.error());
+                return fail<std::tuple<std::string, std::string, codec_t>>(errc::codec_invalid_input,
+                    "invalid Q encoding", std::move(detail));
+            }
+            dec_text = std::move(*decoded);
             method_type = codec_t::BASE64;
         }
         else if (boost::iequals(method, QP_CODEC_STR))
         {
-            dec_text = decode_qp(text_c);
+            auto decoded = decode_qp(text_c);
+            if (!decoded)
+                return fail<std::tuple<std::string, std::string, codec_t>>(std::move(decoded).error());
+            dec_text = std::move(*decoded);
             method_type = codec_t::QUOTED_PRINTABLE;
         }
         else
-            throw codec_error("Bad encoding method.");
+            return fail<std::tuple<std::string, std::string, codec_t>>(errc::codec_invalid_input,
+                "invalid Q encoding", "bad encoding method");
 
-        return std::make_tuple(dec_text, charset, method_type);
+        return ok(std::make_tuple(std::move(dec_text), std::move(charset), method_type));
     }
 
     /**
@@ -161,7 +180,7 @@ public:
     @throw codec_error Bad Q codec format.
     @todo              Returning value to hold `string_t` instead of two `std::string`.
     **/
-    std::tuple<std::string, std::string, codec_t> check_decode(const std::string& text) const
+    result<std::tuple<std::string, std::string, codec_t>> check_decode(const std::string& text) const
     {
         std::string::size_type question_mark_counter = 0;
         const std::string::size_type QUESTION_MARKS_NO = 4;
@@ -183,9 +202,11 @@ public:
                 is_encoded = false;
                 question_mark_counter = 0;
                 auto text_charset = decode(encoded_part);
-                dec_text += std::get<0>(text_charset);
-                charset = std::get<1>(text_charset);
-                method_type = std::get<2>(text_charset);
+                if (!text_charset)
+                    return fail<std::tuple<std::string, std::string, codec_t>>(std::move(text_charset).error());
+                dec_text += std::get<0>(*text_charset);
+                charset = std::get<1>(*text_charset);
+                method_type = std::get<2>(*text_charset);
 
                 encoded_part.clear();
                 ch++;
@@ -197,12 +218,22 @@ public:
         }
 
         if (is_encoded && question_mark_counter < QUESTION_MARKS_NO)
-            throw codec_error("Bad Q codec format.");
+            return fail<std::tuple<std::string, std::string, codec_t>>(errc::codec_invalid_input,
+                "invalid Q encoding", "bad Q codec format");
 
-        return std::make_tuple(dec_text, charset, method_type);
+        return ok(std::make_tuple(std::move(dec_text), std::move(charset), method_type));
     }
 
 private:
+    static std::string format_codec_error(const error_info& err)
+    {
+        if (err.detail.empty())
+            return err.message;
+        std::string detail = err.message;
+        detail += ": ";
+        detail += err.detail;
+        return detail;
+    }
 
     /**
     String representation of Base64 method.
@@ -221,7 +252,7 @@ private:
     @return     Decoded string.
     @throw *    `quoted_printable::decode(const vector<string>&)`
     **/
-    std::string decode_qp(const std::string& text) const
+    result<std::string> decode_qp(const std::string& text) const
     {
         quoted_printable qp(line1_policy_, lines_policy_);
         qp.q_codec_mode(true);

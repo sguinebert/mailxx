@@ -21,6 +21,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <boost/asio/detached.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include "example_util.hpp"
 #include <mailxx/imap/client.hpp>
 #include <mailxx/mime/message.hpp>
 #include <mailxx/net/tls_mode.hpp>
@@ -29,8 +30,6 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 using mailxx::codec;
 using mailxx::message;
 using mailxx::imap::client;
-using mailxx::imap::error;
-using mailxx::net::dialog_error;
 using std::cout;
 using std::endl;
 
@@ -43,42 +42,71 @@ int main()
     boost::asio::co_spawn(io_ctx,
         [&]() -> boost::asio::awaitable<void>
         {
-            try
+            mailxx::imap::options options;
+            options.tls.use_default_verify_paths = true;
+            options.tls.verify = mailxx::net::verify_mode::peer;
+            options.tls.verify_host = true;
+
+            client conn(io_ctx.get_executor(), options);
+            auto connect_res = co_await conn.connect("imap.zoho.com", "993",
+                mailxx::net::tls_mode::implicit, &ssl_ctx, "imap.zoho.com");
+            if (!connect_res)
             {
-                mailxx::imap::options options;
-                options.tls.use_default_verify_paths = true;
-                options.tls.verify = mailxx::net::verify_mode::peer;
-                options.tls.verify_host = true;
-
-                client conn(io_ctx.get_executor(), options);
-                co_await conn.connect("imap.zoho.com", "993",
-                    mailxx::net::tls_mode::implicit, &ssl_ctx, "imap.zoho.com");
-                co_await conn.read_greeting();
-                co_await conn.login("mailxx@zoho.com", "mailxxpass");
-
-                auto [select_resp, stat] = co_await conn.select("INBOX");
-                (void)select_resp;
-                (void)stat;
-
-                auto fetch_resp = co_await conn.fetch("1", "BODY[]");
-                if (!fetch_resp.literals.empty())
-                {
-                    message msg;
-                    msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
-                    msg.parse(fetch_resp.literals.front());
-                    cout << "msg.subject()=" << msg.subject() << endl;
-                }
-
-                co_await conn.close();
-                co_await conn.logout();
+                print_error(connect_res.error());
+                co_return;
             }
-            catch (const error& exc)
+
+            auto greeting_res = co_await conn.read_greeting();
+            if (!greeting_res)
             {
-                cout << exc.what() << endl;
+                print_error(greeting_res.error());
+                co_return;
             }
-            catch (const dialog_error& exc)
+
+            auto login_res = co_await conn.login("mailxx@zoho.com", "mailxxpass");
+            if (!login_res)
             {
-                cout << exc.what() << endl;
+                print_error(login_res.error());
+                co_return;
+            }
+
+            auto select_res = co_await conn.select("INBOX");
+            if (!select_res)
+            {
+                print_error(select_res.error());
+                co_return;
+            }
+            const auto& [select_resp, stat] = select_res.value();
+            (void)select_resp;
+            (void)stat;
+
+            auto fetch_res = co_await conn.fetch("1", "BODY[]");
+            if (!fetch_res)
+            {
+                print_error(fetch_res.error());
+                co_return;
+            }
+            const auto& fetch_resp = fetch_res.value();
+            if (!fetch_resp.literals.empty())
+            {
+                message msg;
+                msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
+                msg.parse(fetch_resp.literals.front());
+                cout << "msg.subject()=" << msg.subject() << endl;
+            }
+
+            auto close_res = co_await conn.close();
+            if (!close_res)
+            {
+                print_error(close_res.error());
+                co_return;
+            }
+
+            auto logout_res = co_await conn.logout();
+            if (!logout_res)
+            {
+                print_error(logout_res.error());
+                co_return;
             }
             co_return;
         },

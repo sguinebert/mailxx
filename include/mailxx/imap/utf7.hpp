@@ -17,7 +17,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <string>
 #include <string_view>
 #include <vector>
-#include <stdexcept>
+#include <mailxx/detail/result.hpp>
 
 namespace mailxx
 {
@@ -78,14 +78,14 @@ inline std::string encode_modified_base64(const std::vector<unsigned char>& byte
     return out;
 }
 
-inline std::vector<unsigned char> decode_modified_base64(std::string_view text)
+inline result<std::vector<unsigned char>> decode_modified_base64(std::string_view text)
 {
     std::vector<unsigned char> out;
     if (text.empty())
-        return out;
+        return ok(std::move(out));
 
     if (text.size() % 4 == 1)
-        throw std::invalid_argument("Invalid modified UTF-7.");
+        return fail<std::vector<unsigned char>>(errc::codec_invalid_input, "invalid modified UTF-7");
 
     out.reserve(text.size() * 3 / 4);
     std::size_t i = 0;
@@ -97,7 +97,7 @@ inline std::vector<unsigned char> decode_modified_base64(std::string_view text)
         int s2 = base64_value(text[i++]);
         int s3 = base64_value(text[i++]);
         if (s0 < 0 || s1 < 0 || s2 < 0 || s3 < 0)
-            throw std::invalid_argument("Invalid modified UTF-7.");
+            return fail<std::vector<unsigned char>>(errc::codec_invalid_input, "invalid modified UTF-7");
 
         out.push_back(static_cast<unsigned char>((s0 << 2) | (s1 >> 4)));
         out.push_back(static_cast<unsigned char>((s1 << 4) | (s2 >> 2)));
@@ -110,7 +110,7 @@ inline std::vector<unsigned char> decode_modified_base64(std::string_view text)
         int s0 = base64_value(text[i++]);
         int s1 = base64_value(text[i++]);
         if (s0 < 0 || s1 < 0)
-            throw std::invalid_argument("Invalid modified UTF-7.");
+            return fail<std::vector<unsigned char>>(errc::codec_invalid_input, "invalid modified UTF-7");
         out.push_back(static_cast<unsigned char>((s0 << 2) | (s1 >> 4)));
     }
     else if (remaining == 3)
@@ -119,98 +119,99 @@ inline std::vector<unsigned char> decode_modified_base64(std::string_view text)
         int s1 = base64_value(text[i++]);
         int s2 = base64_value(text[i++]);
         if (s0 < 0 || s1 < 0 || s2 < 0)
-            throw std::invalid_argument("Invalid modified UTF-7.");
+            return fail<std::vector<unsigned char>>(errc::codec_invalid_input, "invalid modified UTF-7");
         out.push_back(static_cast<unsigned char>((s0 << 2) | (s1 >> 4)));
         out.push_back(static_cast<unsigned char>((s1 << 4) | (s2 >> 2)));
     }
     else if (remaining != 0)
     {
-        throw std::invalid_argument("Invalid modified UTF-7.");
+        return fail<std::vector<unsigned char>>(errc::codec_invalid_input, "invalid modified UTF-7");
     }
 
-    return out;
+    return ok(std::move(out));
 }
 
-inline std::uint32_t decode_utf8(std::string_view text, std::size_t& index)
+inline result<std::uint32_t> decode_utf8(std::string_view text, std::size_t& index)
 {
     if (index >= text.size())
-        throw std::invalid_argument("Invalid UTF-8.");
+        return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
 
     unsigned char b0 = static_cast<unsigned char>(text[index]);
     if (b0 < 0x80)
     {
         index += 1;
-        return b0;
+        return ok(static_cast<std::uint32_t>(b0));
     }
 
     if ((b0 >> 5) == 0x6)
     {
         if (index + 1 >= text.size())
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
         unsigned char b1 = static_cast<unsigned char>(text[index + 1]);
         if ((b1 & 0xC0) != 0x80)
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
         std::uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
         if (cp < 0x80)
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
         index += 2;
-        return cp;
+        return ok(cp);
     }
 
     if ((b0 >> 4) == 0xE)
     {
         if (index + 2 >= text.size())
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
         unsigned char b1 = static_cast<unsigned char>(text[index + 1]);
         unsigned char b2 = static_cast<unsigned char>(text[index + 2]);
         if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80)
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
         std::uint32_t cp = ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
         if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
         index += 3;
-        return cp;
+        return ok(cp);
     }
 
     if ((b0 >> 3) == 0x1E)
     {
         if (index + 3 >= text.size())
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
         unsigned char b1 = static_cast<unsigned char>(text[index + 1]);
         unsigned char b2 = static_cast<unsigned char>(text[index + 2]);
         unsigned char b3 = static_cast<unsigned char>(text[index + 3]);
         if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80)
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
         std::uint32_t cp = ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) |
             ((b2 & 0x3F) << 6) | (b3 & 0x3F);
         if (cp < 0x10000 || cp > 0x10FFFF)
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
         index += 4;
-        return cp;
+        return ok(cp);
     }
 
-    throw std::invalid_argument("Invalid UTF-8.");
+    return fail<std::uint32_t>(errc::codec_invalid_input, "invalid UTF-8");
 }
 
-inline void append_utf16_units(std::uint32_t codepoint, std::vector<std::uint16_t>& out)
+inline result<void> append_utf16_units(std::uint32_t codepoint, std::vector<std::uint16_t>& out)
 {
     if (codepoint <= 0xFFFF)
     {
         if (codepoint >= 0xD800 && codepoint <= 0xDFFF)
-            throw std::invalid_argument("Invalid UTF-8.");
+            return fail<void>(errc::codec_invalid_input, "invalid UTF-8");
         out.push_back(static_cast<std::uint16_t>(codepoint));
-        return;
+        return ok();
     }
 
     if (codepoint > 0x10FFFF)
-        throw std::invalid_argument("Invalid UTF-8.");
+        return fail<void>(errc::codec_invalid_input, "invalid UTF-8");
 
     std::uint32_t value = codepoint - 0x10000;
     out.push_back(static_cast<std::uint16_t>(0xD800 + (value >> 10)));
     out.push_back(static_cast<std::uint16_t>(0xDC00 + (value & 0x3FF)));
+    return ok();
 }
 
-inline void append_utf8(std::uint32_t codepoint, std::string& out)
+inline result<void> append_utf8(std::uint32_t codepoint, std::string& out)
 {
     if (codepoint <= 0x7F)
     {
@@ -236,12 +237,13 @@ inline void append_utf8(std::uint32_t codepoint, std::string& out)
     }
     else
     {
-        throw std::invalid_argument("Invalid modified UTF-7.");
+        return fail<void>(errc::codec_invalid_input, "invalid modified UTF-7");
     }
+    return ok();
 }
 } // namespace imap_utf7_detail
 
-inline std::string encode_modified_utf7(std::string_view utf8)
+inline result<std::string> encode_modified_utf7(std::string_view utf8)
 {
     std::string out;
     out.reserve(utf8.size());
@@ -271,7 +273,10 @@ inline std::string encode_modified_utf7(std::string_view utf8)
     std::size_t index = 0;
     while (index < utf8.size())
     {
-        std::uint32_t cp = imap_utf7_detail::decode_utf8(utf8, index);
+        auto cp_res = imap_utf7_detail::decode_utf8(utf8, index);
+        if (!cp_res)
+            return fail<std::string>(std::move(cp_res).error());
+        std::uint32_t cp = *cp_res;
 
         if (cp == '&')
         {
@@ -287,14 +292,16 @@ inline std::string encode_modified_utf7(std::string_view utf8)
             continue;
         }
 
-        imap_utf7_detail::append_utf16_units(cp, utf16_units);
+        auto append_res = imap_utf7_detail::append_utf16_units(cp, utf16_units);
+        if (!append_res)
+            return fail<std::string>(std::move(append_res).error());
     }
 
     flush_utf16();
-    return out;
+    return ok(std::move(out));
 }
 
-inline std::string decode_modified_utf7(std::string_view mutf7)
+inline result<std::string> decode_modified_utf7(std::string_view mutf7)
 {
     std::string out;
     out.reserve(mutf7.size());
@@ -304,7 +311,7 @@ inline std::string decode_modified_utf7(std::string_view mutf7)
     {
         unsigned char ch = static_cast<unsigned char>(mutf7[i]);
         if (ch & 0x80)
-            throw std::invalid_argument("Invalid modified UTF-7.");
+            return fail<std::string>(errc::codec_invalid_input, "invalid modified UTF-7");
 
         if (ch != '&')
         {
@@ -314,7 +321,7 @@ inline std::string decode_modified_utf7(std::string_view mutf7)
         }
 
         if (i + 1 >= mutf7.size())
-            throw std::invalid_argument("Invalid modified UTF-7.");
+            return fail<std::string>(errc::codec_invalid_input, "invalid modified UTF-7");
 
         if (mutf7[i + 1] == '-')
         {
@@ -325,12 +332,15 @@ inline std::string decode_modified_utf7(std::string_view mutf7)
 
         std::size_t end = mutf7.find('-', i + 1);
         if (end == std::string_view::npos)
-            throw std::invalid_argument("Invalid modified UTF-7.");
+            return fail<std::string>(errc::codec_invalid_input, "invalid modified UTF-7");
 
         std::string_view b64 = mutf7.substr(i + 1, end - (i + 1));
-        std::vector<unsigned char> bytes = imap_utf7_detail::decode_modified_base64(b64);
+        auto bytes_res = imap_utf7_detail::decode_modified_base64(b64);
+        if (!bytes_res)
+            return fail<std::string>(std::move(bytes_res).error());
+        std::vector<unsigned char> bytes = std::move(*bytes_res);
         if (bytes.size() % 2 != 0)
-            throw std::invalid_argument("Invalid modified UTF-7.");
+            return fail<std::string>(errc::codec_invalid_input, "invalid modified UTF-7");
 
         std::size_t j = 0;
         while (j < bytes.size())
@@ -341,28 +351,32 @@ inline std::string decode_modified_utf7(std::string_view mutf7)
             if (unit >= 0xD800 && unit <= 0xDBFF)
             {
                 if (j + 1 >= bytes.size())
-                    throw std::invalid_argument("Invalid modified UTF-7.");
+                    return fail<std::string>(errc::codec_invalid_input, "invalid modified UTF-7");
                 std::uint16_t low = static_cast<std::uint16_t>((bytes[j] << 8) | bytes[j + 1]);
                 j += 2;
                 if (low < 0xDC00 || low > 0xDFFF)
-                    throw std::invalid_argument("Invalid modified UTF-7.");
+                    return fail<std::string>(errc::codec_invalid_input, "invalid modified UTF-7");
                 std::uint32_t cp = 0x10000 + (((unit - 0xD800) << 10) | (low - 0xDC00));
-                imap_utf7_detail::append_utf8(cp, out);
+                auto append_res = imap_utf7_detail::append_utf8(cp, out);
+                if (!append_res)
+                    return fail<std::string>(std::move(append_res).error());
             }
             else if (unit >= 0xDC00 && unit <= 0xDFFF)
             {
-                throw std::invalid_argument("Invalid modified UTF-7.");
+                return fail<std::string>(errc::codec_invalid_input, "invalid modified UTF-7");
             }
             else
             {
-                imap_utf7_detail::append_utf8(unit, out);
+                auto append_res = imap_utf7_detail::append_utf8(unit, out);
+                if (!append_res)
+                    return fail<std::string>(std::move(append_res).error());
             }
         }
 
         i = end + 1;
     }
 
-    return out;
+    return ok(std::move(out));
 }
 
 } // namespace mailxx

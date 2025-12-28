@@ -19,13 +19,22 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <unordered_set>
 #include <utility>
 #include <optional>
+#include <stdexcept>
 #include <cctype>
+#include <array>
+#include <queue>
+#include <thread>
+#include <condition_variable>
+#include <mutex>
 
 #include <mailxx/detail/asio_decl.hpp>
-#include <mailxx/detail/auth_policy.hpp>
+#include <mailxx/detail/exception_bridge.hpp>
 #include <mailxx/detail/log.hpp>
+#include <mailxx/detail/oauth2_retry.hpp>
+#include <mailxx/detail/result.hpp>
 
 #include <mailxx/net/dialog.hpp>
+#include <mailxx/net/error_mapping.hpp>
 #include <mailxx/net/tls_mode.hpp>
 #include <mailxx/net/upgradable_stream.hpp>
 #include <mailxx/mime/message.hpp>
@@ -34,12 +43,16 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/detail/append.hpp>
 #include <mailxx/detail/async_mutex.hpp>
+#include <mailxx/detail/error_detail.hpp>
 #include <mailxx/detail/sasl.hpp>
 #include <mailxx/detail/sanitize.hpp>
 #include <mailxx/detail/redact.hpp>
 #include <mailxx/detail/reconnection.hpp>
+#include <mailxx/oauth2/token_source.hpp>
 #include <mailxx/smtp/types.hpp>
 #include <mailxx/smtp/error.hpp>
+#include <mailxx/smtp/error_mapping.hpp>
+#include <mailxx/smtp/error_mapping.hpp>
 
 namespace mailxx::smtp
 {
@@ -69,50 +82,50 @@ public:
 
     executor_type get_executor() const { return executor_; }
 
-    awaitable<void> connect(const std::string& host, unsigned short port)
+    awaitable<mailxx::result<void>> connect(const std::string& host, unsigned short port)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await connect_impl(host, std::to_string(port), mailxx::net::tls_mode::none, nullptr, {});
+        co_return co_await connect_impl(host, std::to_string(port), mailxx::net::tls_mode::none, nullptr, {});
     }
 
-    awaitable<void> connect(const std::string& host, const std::string& service)
+    awaitable<mailxx::result<void>> connect(const std::string& host, const std::string& service)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await connect_impl(host, service, mailxx::net::tls_mode::none, nullptr, {});
+        co_return co_await connect_impl(host, service, mailxx::net::tls_mode::none, nullptr, {});
     }
 
-    awaitable<void> connect(const std::string& host, unsigned short port, mailxx::net::tls_mode mode,
+    awaitable<mailxx::result<void>> connect(const std::string& host, unsigned short port, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await connect_impl(host, std::to_string(port), mode, tls_ctx, std::move(sni));
+        co_return co_await connect_impl(host, std::to_string(port), mode, tls_ctx, std::move(sni));
     }
 
     /**
      * Connect with explicit TLS mode.
      * If options.auto_starttls is enabled, performs greeting -> EHLO -> STARTTLS -> EHLO.
      */
-    awaitable<void> connect(const std::string& host, const std::string& service, mailxx::net::tls_mode mode,
+    awaitable<mailxx::result<void>> connect(const std::string& host, const std::string& service, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
+        co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
     }
 
-    awaitable<void> connect(std::string host, std::string service, mailxx::net::tls_mode mode,
+    awaitable<mailxx::result<void>> connect(std::string host, std::string service, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
+        co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
     }
 
-    awaitable<reply> read_greeting()
+    awaitable<mailxx::result<void>> read_greeting()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await read_greeting_impl();
     }
 
-    awaitable<reply> ehlo(std::string domain = {})
+    awaitable<mailxx::result<void>> ehlo(std::string domain = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await ehlo_impl(std::move(domain));
@@ -122,16 +135,16 @@ public:
      * Upgrade the connection using STARTTLS.
      * After STARTTLS, EHLO must be issued again to refresh capabilities.
      */
-    awaitable<void> start_tls(ssl::context& context, std::string sni = {})
+    awaitable<mailxx::result<void>> start_tls(ssl::context& context, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await start_tls_impl(context, std::move(sni));
+        co_return co_await start_tls_impl(context, std::move(sni));
     }
 
-    awaitable<void> authenticate(const std::string& username, const std::string& password, auth_method method)
+    awaitable<mailxx::result<void>> authenticate(const std::string& username, const std::string& password, auth_method method)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await authenticate_impl(username, password, method);
+        co_return co_await authenticate_impl(username, password, method);
     }
 
     /**
@@ -141,13 +154,29 @@ public:
      * @param username The email address
      * @param access_token The OAuth2 access token (not refresh token)
      */
-    awaitable<void> authenticate_oauth2(const std::string& username, const std::string& access_token)
+    awaitable<mailxx::result<void>> authenticate_oauth2(const std::string& username, const std::string& access_token)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await authenticate_impl(username, access_token, auth_method::xoauth2);
+        co_return co_await authenticate_impl(username, access_token, auth_method::xoauth2);
     }
 
-    awaitable<reply> send(const mailxx::message& msg, const envelope& env = envelope{})
+    awaitable<mailxx::result<void>> authenticate_oauth2(
+        const std::string& username,
+        mailxx::oauth2::token_source& source)
+    {
+        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        auto auth = [&](const std::string& token) -> awaitable<mailxx::result<void>>
+        {
+            co_return co_await authenticate_impl(username, token, auth_method::xoauth2);
+        };
+        auto should_retry = [](const error_info& err)
+        {
+            return err.code == errc::smtp_auth_failed;
+        };
+        co_return co_await mailxx::detail::oauth2_auth_with_retry(source, auth, should_retry);
+    }
+
+    awaitable<mailxx::result<reply>> send(const mailxx::message& msg, const envelope& env = envelope{})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await send_impl(msg, env);
@@ -159,13 +188,21 @@ public:
      * 
      * @param msg The message to send
      * @param env Extended envelope with DSN options
-     * @return Server reply
-     * @throws error if DSN requested but not supported by server
+     * @return Result containing server reply or error
      */
-    awaitable<reply> send(const mailxx::message& msg, const envelope_dsn& env)
+    awaitable<mailxx::result<reply>> send(const mailxx::message& msg, const envelope_dsn& env)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await send_dsn_impl(msg, env);
+    }
+
+    /**
+     * Send message without buffering the full DATA payload in memory.
+     */
+    awaitable<mailxx::result<reply>> send_streaming(const envelope& env, const mailxx::message& msg)
+    {
+        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        co_return co_await send_streaming_impl(env, msg);
     }
 
     /**
@@ -233,9 +270,9 @@ public:
      * 
      * @param msg The message to send
      * @param env Extended envelope with extension options
-     * @return Server reply
+     * @return Result containing server reply or error
      */
-    awaitable<reply> send(const mailxx::message& msg, const envelope_ext& env)
+    awaitable<mailxx::result<reply>> send(const mailxx::message& msg, const envelope_ext& env)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await send_ext_impl(msg, env);
@@ -247,7 +284,7 @@ public:
      * @param env Optional envelope (sender/recipients override)
      * @param progress Callback invoked during upload
      */
-    awaitable<reply> send_with_progress(
+    awaitable<mailxx::result<reply>> send_with_progress(
         const mailxx::message& msg, 
         const envelope& env,
         progress_callback_t progress)
@@ -273,9 +310,9 @@ public:
      * 
      * @param msg The message to send
      * @param env Optional envelope (sender/recipients override)
-     * @return Reply from final DATA command
+     * @return Result containing reply from final DATA command or error
      */
-    awaitable<reply> send_pipelined(const mailxx::message& msg, const envelope& env = envelope{})
+    awaitable<mailxx::result<reply>> send_pipelined(const mailxx::message& msg, const envelope& env = envelope{})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         if (supports_pipelining())
@@ -284,28 +321,31 @@ public:
             co_return co_await send_impl(msg, env);  // Fallback to sequential
     }
 
-    awaitable<reply> noop()
+    awaitable<mailxx::result<reply>> noop()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         if (state_ == state::disconnected)
-            throw error("Connection is not established.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Connection is not established.", state_detail("NOOP"));
         co_return co_await command_impl("NOOP");
     }
 
-    awaitable<reply> rset()
+    awaitable<mailxx::result<reply>> rset()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         if (state_ == state::disconnected)
-            throw error("Connection is not established.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Connection is not established.", state_detail("RSET"));
         co_return co_await command_impl("RSET");
     }
 
-    awaitable<reply> quit()
+    awaitable<mailxx::result<reply>> quit()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         if (state_ == state::disconnected)
-            throw error("Connection is not established.", "");
-        reply rep = co_await command_impl("QUIT");
+            co_return fail<reply>(errc::smtp_invalid_state, "Connection is not established.", state_detail("QUIT"));
+        auto rep_res = co_await command_impl("QUIT");
+        if (!rep_res)
+            co_return rep_res;
+        reply rep = std::move(*rep_res);
         dialog_.reset();
         state_ = state::disconnected;
         reset_capabilities();
@@ -351,7 +391,7 @@ public:
      * @param credentials Optional credentials for re-authentication (username, password, method)
      * @return Reply from send operation
      */
-    awaitable<reply> send_with_reconnection(
+    awaitable<mailxx::result<reply>> send_with_reconnection(
         const mailxx::message& msg,
         const envelope& env,
         std::optional<std::tuple<std::string, std::string, auth_method>> credentials = std::nullopt)
@@ -360,29 +400,49 @@ public:
             co_return co_await send(msg, env);
         
         unsigned int attempt = 0;
-        std::exception_ptr last_error;
+        error_info last_error;
+        auto format_error = [](const error_info& err)
+        {
+            std::string msg = std::string(mailxx::to_string(err.code));
+            if (!err.message.empty())
+            {
+                msg += ": ";
+                msg += err.message;
+            }
+            if (!err.detail.empty())
+            {
+                msg += " | ";
+                msg += err.detail;
+            }
+            return msg;
+        };
         
         while (true)
         {
-            try
+            auto send_res = co_await send(msg, env);
+            if (send_res)
             {
-                co_return co_await send(msg, env);
+                co_return send_res;
             }
-            catch (const std::exception& e)
+            
+            last_error = std::move(send_res).error();
+            
+            if (!is_connection_error(last_error))
+                co_return mailxx::fail<reply>(std::move(last_error));
+            
+            while (true)
             {
-                last_error = std::current_exception();
-                
-                if (!is_connection_error(e))
-                    std::rethrow_exception(last_error);
-                
                 ++attempt;
                 
                 if (reconnection_policy_.max_attempts > 0 && 
                     attempt > reconnection_policy_.max_attempts)
                 {
                     if (reconnection_policy_.on_reconnect_failed)
-                        reconnection_policy_.on_reconnect_failed(e);
-                    std::rethrow_exception(last_error);
+                    {
+                        std::runtime_error err(format_error(last_error));
+                        reconnection_policy_.on_reconnect_failed(err);
+                    }
+                    co_return mailxx::fail<reply>(std::move(last_error));
                 }
                 
                 auto delay = reconnection_policy_.calculate_delay(attempt);
@@ -390,7 +450,7 @@ public:
                 if (reconnection_policy_.on_reconnect_attempt)
                 {
                     if (!reconnection_policy_.on_reconnect_attempt(attempt, delay))
-                        std::rethrow_exception(last_error);
+                        co_return mailxx::fail<reply>(std::move(last_error));
                 }
                 
                 // Wait before reconnecting
@@ -398,53 +458,76 @@ public:
                 timer.expires_after(delay);
                 co_await timer.async_wait(use_awaitable);
                 
-                // Try to reconnect
-                try
+                // Reset state
+                dialog_.reset();
+                state_ = state::disconnected;
+                reset_capabilities();
+                
+                // Reconnect
+                auto connect_res = co_await connect_impl(saved_host_, saved_service_);
+                if (!connect_res)
                 {
-                    // Reset state
-                    dialog_.reset();
-                    state_ = state::disconnected;
-                    reset_capabilities();
-                    
-                    // Reconnect
-                    co_await connect_impl(saved_host_, saved_service_);
-                    co_await read_greeting_impl();
-                    co_await ehlo_impl({});
-                    
-                    // Re-authenticate if credentials provided
-                    if (credentials.has_value())
-                    {
-                        auto [user, pass, method] = credentials.value();
-                        co_await authenticate_impl(user, pass, method);
-                    }
-                    
-                    if (reconnection_policy_.on_reconnect_success)
-                        reconnection_policy_.on_reconnect_success();
-                }
-                catch (const std::exception& conn_error)
-                {
-                    // Connection failed, try again
+                    last_error = std::move(connect_res).error();
+                    if (!is_connection_error(last_error))
+                        co_return mailxx::fail<reply>(std::move(last_error));
                     continue;
                 }
+                auto greeting_res = co_await read_greeting_impl();
+                if (!greeting_res)
+                {
+                    last_error = std::move(greeting_res).error();
+                    if (!is_connection_error(last_error))
+                        co_return mailxx::fail<reply>(std::move(last_error));
+                    continue;
+                }
+                auto ehlo_res = co_await ehlo_impl({});
+                if (!ehlo_res)
+                {
+                    last_error = std::move(ehlo_res).error();
+                    if (!is_connection_error(last_error))
+                        co_return mailxx::fail<reply>(std::move(last_error));
+                    continue;
+                }
+                
+                // Re-authenticate if credentials provided
+                if (credentials.has_value())
+                {
+                    auto [user, pass, method] = credentials.value();
+                    auto auth_res = co_await authenticate_impl(user, pass, method);
+                    if (!auth_res)
+                    {
+                        last_error = std::move(auth_res).error();
+                        if (!is_connection_error(last_error))
+                            co_return mailxx::fail<reply>(std::move(last_error));
+                        continue;
+                    }
+                }
+                
+                if (reconnection_policy_.on_reconnect_success)
+                    reconnection_policy_.on_reconnect_success();
+                break;
             }
         }
     }
 
 private:
-    /// Check if an exception indicates a connection error
-    [[nodiscard]] static bool is_connection_error(const std::exception& e)
+    /// Check if an error indicates a connection failure
+    [[nodiscard]] static bool is_connection_error(const error_info& err) noexcept
     {
-        const std::string msg = e.what();
-        static const char* keywords[] = {
-            "connection", "disconnected", "broken pipe", "reset by peer",
-            "timed out", "timeout", "eof", "end of file", "closed", "network"
-        };
-        for (const char* keyword : keywords)
+        switch (err.code)
         {
-            if (msg.find(keyword) != std::string::npos)
+            case errc::net_resolve_failed:
+            case errc::net_connect_failed:
+            case errc::net_connection_refused:
+            case errc::net_connection_reset:
+            case errc::net_io_failed:
+            case errc::net_timeout:
+            case errc::net_eof:
+            case errc::net_cancelled:
                 return true;
+            default:
+                return false;
         }
-        return false;
     }
 
     static void append_smtp_data_terminator(std::string& data)
@@ -473,14 +556,165 @@ private:
         bool needs_utf8 = false;
     };
 
-    static mail_data_info prepare_mail_data(const mailxx::message& msg, const std::string& mail_from,
+    class streaming_queue
+    {
+    public:
+        explicit streaming_queue(std::size_t max_buffer = 1 << 16) : max_buffer_(max_buffer) {}
+
+        void push(std::string chunk)
+        {
+            std::unique_lock lk(mutex_);
+            space_cv_.wait(lk, [&] { return buffered_ + chunk.size() <= max_buffer_ || done_; });
+            if (done_)
+                return;
+            buffered_ += chunk.size();
+            queue_.push(std::move(chunk));
+            data_cv_.notify_one();
+        }
+
+        bool pop(std::string& out)
+        {
+            std::unique_lock lk(mutex_);
+            data_cv_.wait(lk, [&] { return !queue_.empty() || done_ || error_; });
+            if (error_)
+                return false;
+            if (queue_.empty())
+                return false;
+            out = std::move(queue_.front());
+            queue_.pop();
+            buffered_ -= out.size();
+            space_cv_.notify_one();
+            return true;
+        }
+
+        void set_done()
+        {
+            std::lock_guard lk(mutex_);
+            done_ = true;
+            data_cv_.notify_all();
+            space_cv_.notify_all();
+        }
+
+        void set_error(std::string msg)
+        {
+            std::lock_guard lk(mutex_);
+            error_ = true;
+            error_msg_ = std::move(msg);
+            done_ = true;
+            data_cv_.notify_all();
+            space_cv_.notify_all();
+        }
+
+        bool has_error() const
+        {
+            std::lock_guard lk(mutex_);
+            return error_;
+        }
+
+        std::string error_msg() const
+        {
+            std::lock_guard lk(mutex_);
+            return error_msg_;
+        }
+
+    private:
+        std::size_t max_buffer_;
+        mutable std::mutex mutex_;
+        std::condition_variable data_cv_;
+        std::condition_variable space_cv_;
+        std::queue<std::string> queue_;
+        std::size_t buffered_{0};
+        bool done_{false};
+        bool error_{false};
+        std::string error_msg_;
+    };
+
+    class smtp_dot_stuffing_sink : public detail::output_sink
+    {
+    public:
+        smtp_dot_stuffing_sink(std::size_t flush_threshold = 8192, streaming_queue* queue = nullptr)
+            : flush_threshold_(flush_threshold), queue_(queue)
+        {
+        }
+
+        void write(std::string_view chunk) override
+        {
+            for (unsigned char c : chunk)
+            {
+                if (c & 0x80)
+                    has_8bit_ = true;
+                if (bol_ && c == '.')
+                    add_char('.');
+                add_char(static_cast<char>(c));
+            }
+        }
+
+        void finalize() { flush_buffer(); }
+
+        bool has_8bit() const noexcept { return has_8bit_; }
+        std::size_t size() const noexcept { return total_size_; }
+        bool ends_with_crlf() const noexcept { return last_crlf_; }
+
+    private:
+        void add_char(char c)
+        {
+            last_two_[0] = last_two_[1];
+            last_two_[1] = c;
+            last_crlf_ = (last_two_[0] == '\r' && last_two_[1] == '\n');
+
+            buffer_.push_back(c);
+            ++total_size_;
+            if (buffer_.size() >= flush_threshold_)
+                flush_buffer();
+
+            if (c == '\n')
+            {
+                bol_ = true;
+                prev_cr_ = false;
+            }
+            else if (c == '\r')
+            {
+                prev_cr_ = true;
+                bol_ = false;
+            }
+            else
+            {
+                bol_ = prev_cr_;
+                prev_cr_ = false;
+            }
+        }
+
+        void flush_buffer()
+        {
+            if (buffer_.empty())
+                return;
+            if (queue_)
+                queue_->push(std::move(buffer_));
+            buffer_.clear();
+            buffer_.reserve(flush_threshold_);
+        }
+
+        std::size_t flush_threshold_;
+        streaming_queue* queue_;
+        std::string buffer_;
+        bool bol_{true};
+        bool prev_cr_{false};
+        bool last_crlf_{false};
+        bool has_8bit_{false};
+        std::size_t total_size_{0};
+        std::array<char, 2> last_two_{{0, 0}};
+    };
+
+    static mailxx::result<mail_data_info> prepare_mail_data(const mailxx::message& msg, const std::string& mail_from,
         const std::vector<std::string>& recipients)
     {
         mail_data_info info;
         message_format_options_t opts;
         opts.dot_escape = true;
         opts.add_bcc_header = false;
-        msg.format(info.data, opts);
+        auto fmt_res = msg.format_result(info.data, opts);
+        if (!fmt_res)
+            return mailxx::fail<mail_data_info>(std::move(fmt_res).error());
         info.size = info.data.size() + smtp_data_terminator_size(info.data);
         info.has_8bit = contains_8bit(info.data);
         info.needs_utf8 = contains_utf8(mail_from);
@@ -495,7 +729,7 @@ private:
                 }
             }
         }
-        return info;
+        return mailxx::ok(std::move(info));
     }
 
     void append_mail_extensions(std::string& cmd, const mail_data_info& info) const
@@ -545,18 +779,195 @@ private:
         server_name_.clear();
     }
 
-    std::string resolve_sni(std::string_view host, std::string sni) const
+    [[nodiscard]] static const char* state_to_string(state value) noexcept
+    {
+        switch (value)
+        {
+            case state::disconnected: return "disconnected";
+            case state::connected: return "connected";
+            case state::greeted: return "greeted";
+            case state::ehlo_done: return "ehlo_done";
+            case state::tls: return "tls";
+            case state::authenticated: return "authenticated";
+        }
+        return "unknown";
+    }
+
+    [[nodiscard]] std::string peer_label(std::string_view host = {}, std::string_view service = {}) const
+    {
+        std::string_view peer_host = host.empty() ? std::string_view(saved_host_) : host;
+        std::string_view peer_service = service.empty() ? std::string_view(saved_service_) : service;
+        if (peer_host.empty() && peer_service.empty())
+            return {};
+
+        std::string out;
+        out.reserve(peer_host.size() + peer_service.size() + 1);
+        if (!peer_host.empty())
+            out.append(peer_host.data(), peer_host.size());
+        if (!peer_service.empty())
+        {
+            if (!out.empty())
+                out.push_back(':');
+            out.append(peer_service.data(), peer_service.size());
+        }
+        return out;
+    }
+
+    void append_peer_detail(mailxx::detail::error_detail& detail, std::string_view host = {}, std::string_view service = {}) const
+    {
+        std::string peer = peer_label(host, service);
+        if (peer.empty())
+            return;
+        detail.add("peer", peer);
+    }
+
+    [[nodiscard]] std::string_view smtp_host() const
+    {
+        if (!remote_host_.empty())
+            return remote_host_;
+        return saved_host_;
+    }
+
+    [[nodiscard]] std::string_view smtp_service() const
+    {
+        return saved_service_;
+    }
+
+    [[nodiscard]] std::string smtp_detail(
+        command_kind kind,
+        std::string_view command,
+        const reply& rep,
+        std::string_view previous = {}) const
+    {
+        std::string redacted;
+        if (!command.empty())
+            redacted = mailxx::detail::redact_line(command);
+        if (options_.redact_secrets_in_trace)
+        {
+            reply sanitized = rep;
+            for (auto& line : sanitized.lines)
+                line = mailxx::detail::redact_line(line);
+            return mailxx::smtp::make_smtp_detail(smtp_host(), smtp_service(), kind, redacted, sanitized, previous).str();
+        }
+        return mailxx::smtp::make_smtp_detail(smtp_host(), smtp_service(), kind, redacted, rep, previous).str();
+    }
+
+    [[nodiscard]] static constexpr std::string_view smtp_reply_message(command_kind kind) noexcept
+    {
+        switch (kind)
+        {
+            case command_kind::auth: return "smtp auth failed";
+            case command_kind::rcpt_to: return "smtp rcpt rejected";
+            case command_kind::mail_from: return "smtp mail from rejected";
+            case command_kind::data_cmd:
+            case command_kind::data_body: return "smtp data rejected";
+            case command_kind::ehlo: return "smtp ehlo failed";
+            case command_kind::helo: return "smtp helo failed";
+            default: return "smtp command failed";
+        }
+    }
+
+    template<typename T>
+    [[nodiscard]] mailxx::result<T> smtp_fail(
+        command_kind kind,
+        const reply& rep,
+        std::string_view command,
+        std::string_view previous = {}) const
+    {
+        return mailxx::fail<T>(
+            map_smtp_reply(kind, rep.status),
+            std::string(smtp_reply_message(kind)),
+            smtp_detail(kind, command, rep, previous));
+    }
+
+    [[nodiscard]] std::string state_detail(std::string_view operation) const
+    {
+        mailxx::detail::error_detail detail;
+        detail.add("proto", "SMTP");
+        detail.add("operation", operation);
+        detail.add("state", state_to_string(state_));
+        append_peer_detail(detail);
+        return detail.str();
+    }
+
+    [[nodiscard]] std::string command_detail(std::string_view command) const
+    {
+        mailxx::detail::error_detail detail;
+        detail.add("proto", "SMTP");
+        detail.add("command", mailxx::detail::redact_line(command));
+        append_peer_detail(detail);
+        return detail.str();
+    }
+
+    [[nodiscard]] std::string parse_error_detail(std::string_view command, std::string_view line) const
+    {
+        mailxx::detail::error_detail detail;
+        detail.add("proto", "smtp");
+        detail.add("command.line", mailxx::detail::redact_line(command));
+        if (!line.empty())
+            detail.add("line", line);
+        append_peer_detail(detail);
+        return detail.str();
+    }
+
+    [[nodiscard]] static std::string format_sys(const asio::error_code& ec)
+    {
+        std::string sys = ec.message();
+        if (!sys.empty())
+        {
+            sys += " (";
+            sys += std::to_string(ec.value());
+            sys += ")";
+        }
+        else
+        {
+            sys = std::to_string(ec.value());
+        }
+        return sys;
+    }
+
+    [[nodiscard]] error_info make_net_error(
+        const asio::error_code& ec,
+        mailxx::net::io_stage stage,
+        std::string_view operation,
+        std::string_view host = {},
+        std::string_view service = {}) const
+    {
+        const bool timeout_triggered = (ec == asio::error::timed_out);
+        const errc code = mailxx::net::map_net_error(stage, ec, timeout_triggered);
+        auto detail = mailxx::net::make_net_detail("SMTP", host, service, stage, operation);
+        detail.add("sys", format_sys(ec));
+        return mailxx::make_error(code, std::string(mailxx::to_string(code)), detail.str(), ec);
+    }
+
+    [[nodiscard]] mailxx::result<void> validate_no_crlf_or_nul(
+        std::string_view value,
+        const char* field,
+        std::string_view host = {},
+        std::string_view service = {}) const
+    {
+        if (!mailxx::detail::contains_crlf_or_nul(value))
+            return mailxx::ok();
+        std::string msg = "Invalid ";
+        msg += field ? field : "value";
+        msg += ": CR/LF or NUL not allowed.";
+        mailxx::detail::error_detail detail;
+        append_peer_detail(detail, host, service);
+        return mailxx::fail<void>(errc::codec_invalid_input, std::move(msg), detail.str());
+    }
+
+    [[nodiscard]] mailxx::result<std::string> resolve_sni(std::string_view host, std::string sni) const
     {
         if (sni.empty())
             sni.assign(host.begin(), host.end());
-        mailxx::detail::ensure_no_crlf_or_nul(sni, "sni");
+        auto check = validate_no_crlf_or_nul(sni, "sni", host);
+        if (!check)
+            return mailxx::fail<std::string>(std::move(check).error());
         return sni;
     }
 
     dialog_type& dialog()
     {
-        if (!dialog_.has_value())
-            throw error("Connection is not established.", "");
         return *dialog_;
     }
 
@@ -583,34 +994,60 @@ private:
         logger.trace_protocol("SMTP", mailxx::log::direction::send, line);
     }
 
-    awaitable<void> connect_impl(const std::string& host, const std::string& service,
+    awaitable<mailxx::result<void>> connect_impl(const std::string& host, const std::string& service,
         mailxx::net::tls_mode mode = mailxx::net::tls_mode::none,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
         if (state_ != state::disconnected)
-            throw error("Connection is already established.", "");
-        mailxx::detail::ensure_no_crlf_or_nul(host, "host");
+            co_return fail_void(errc::smtp_invalid_state, "Connection is already established.", state_detail("CONNECT"));
+
+        auto host_check = validate_no_crlf_or_nul(host, "host", host, service);
+        if (!host_check)
+            co_return host_check;
+        auto service_check = validate_no_crlf_or_nul(service, "service", host, service);
+        if (!service_check)
+            co_return service_check;
+
         remote_host_ = host;
-        
+
         // Save for auto-reconnection
         saved_host_ = host;
         saved_service_ = service;
 
         tcp_type::resolver resolver(executor_);
-        auto endpoints = co_await resolver.async_resolve(host, service, use_awaitable);
+        auto [resolve_ec, endpoints] = co_await resolver.async_resolve(host, service, use_nothrow_awaitable);
+        if (resolve_ec)
+            co_return mailxx::fail<void>(make_net_error(resolve_ec, mailxx::net::io_stage::resolve, "resolve", host, service));
 
         mailxx::net::upgradable_stream stream(executor_);
-        co_await async_connect(stream.lowest_layer(), endpoints, use_awaitable);
+        auto [connect_ec, endpoint] = co_await async_connect(stream.lowest_layer(), endpoints, use_nothrow_awaitable);
+        (void)endpoint;
+        if (connect_ec)
+            co_return mailxx::fail<void>(make_net_error(connect_ec, mailxx::net::io_stage::connect, "connect", host, service));
 
         if (mode == mailxx::net::tls_mode::implicit)
         {
             if (tls_ctx == nullptr)
-                throw error("TLS context is required.", "Implicit TLS needs a context.");
-            std::string resolved_sni = resolve_sni(host, std::move(sni));
-            co_await stream.start_tls(*tls_ctx, std::move(resolved_sni), options_.tls);
+                co_return fail_void(errc::smtp_invalid_state, "TLS context is required.", state_detail("CONNECT"));
+            auto resolved_sni = resolve_sni(host, std::move(sni));
+            if (!resolved_sni)
+                co_return mailxx::fail<void>(std::move(resolved_sni).error());
+            auto tls_res = co_await stream.start_tls(*tls_ctx, std::move(*resolved_sni), options_.tls);
+            if (!tls_res)
+            {
+                auto err = tls_res.error();
+                if (err.detail.empty())
+                {
+                    mailxx::detail::error_detail detail;
+                    append_peer_detail(detail, host, service);
+                    err.detail = detail.str();
+                }
+                co_return mailxx::fail<void>(std::move(err));
+            }
         }
 
         dialog_.emplace(std::move(stream));
+        dialog_->set_peer(host, service);
         configure_trace();
         state_ = state::connected;
         reset_capabilities();
@@ -618,49 +1055,70 @@ private:
         if (mode == mailxx::net::tls_mode::starttls && options_.auto_starttls)
         {
             if (tls_ctx == nullptr)
-                throw error("TLS context is required.", "STARTTLS needs a context.");
-            co_await read_greeting_impl();
-            co_await ehlo_impl({});
-            co_await start_tls_impl(*tls_ctx, std::move(sni));
-            co_await ehlo_impl({});
+                co_return fail_void(errc::smtp_invalid_state, "TLS context is required.", state_detail("STARTTLS"));
+            MAILXX_TRY_CO_AWAIT(read_greeting_impl());
+            MAILXX_TRY_CO_AWAIT(ehlo_impl({}));
+            MAILXX_TRY_CO_AWAIT(start_tls_impl(*tls_ctx, std::move(sni)));
+            MAILXX_TRY_CO_AWAIT(ehlo_impl({}));
         }
+        co_return mailxx::ok();
     }
 
-    awaitable<reply> read_greeting_impl()
+    awaitable<mailxx::result<void>> read_greeting_impl()
     {
         if (state_ != state::connected)
-            throw error("Greeting requires an established connection.", "");
-        reply rep = co_await read_reply_impl();
+            co_return fail_void(errc::smtp_invalid_state, "Greeting requires an established connection.",
+                state_detail("GREETING"));
+        auto rep_res = co_await read_reply_impl("GREETING");
+        if (!rep_res)
+            co_return mailxx::fail<void>(std::move(rep_res).error());
+        reply rep = std::move(*rep_res);
         if (rep.status != 220)
-            throw error("Connection rejection.", rep.message());
+            co_return smtp_fail<void>(command_kind::greeting, rep, "GREETING");
         state_ = state::greeted;
-        co_return rep;
+        co_return mailxx::ok();
     }
 
-    awaitable<reply> ehlo_impl(std::string domain)
+    awaitable<mailxx::result<void>> ehlo_impl(std::string domain)
     {
         if (state_ != state::greeted && state_ != state::tls)
-            throw error("EHLO requires a greeting.", "");
+            co_return fail_void(errc::smtp_invalid_state, "EHLO requires a greeting.", state_detail("EHLO"));
 
         if (!domain.empty())
-            mailxx::detail::ensure_no_crlf_or_nul(domain, "domain");
+        {
+            auto check = validate_no_crlf_or_nul(domain, "domain");
+            if (!check)
+                co_return check;
+        }
         const std::string helo_name = domain.empty() ? default_hostname() : std::move(domain);
-        mailxx::detail::ensure_no_crlf_or_nul(helo_name, "helo_name");
-        reply rep = co_await command_impl("EHLO " + helo_name);
+        {
+            auto check = validate_no_crlf_or_nul(helo_name, "helo_name");
+            if (!check)
+                co_return check;
+        }
+        const std::string ehlo_cmd = "EHLO " + helo_name;
+        auto rep_res = co_await command_impl(ehlo_cmd);
+        if (!rep_res)
+            co_return mailxx::fail<void>(std::move(rep_res).error());
+        reply rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
         {
             if (!allows_helo_fallback(rep.status))
-                throw error("EHLO rejection.", rep.message());
+                co_return smtp_fail<void>(command_kind::ehlo, rep, ehlo_cmd);
 
-            reply helo_rep = co_await command_impl("HELO " + helo_name);
+            const std::string helo_cmd = "HELO " + helo_name;
+            auto helo_res = co_await command_impl(helo_cmd);
+            if (!helo_res)
+                co_return mailxx::fail<void>(std::move(helo_res).error());
+            reply helo_rep = std::move(*helo_res);
             if (!helo_rep.is_positive_completion())
-                throw error("HELO rejection.", helo_rep.message());
+                co_return smtp_fail<void>(command_kind::helo, helo_rep, helo_cmd, "ehlo_failed");
             capabilities_.entries.clear();
             capabilities_known_ = false;
             helo_only_ = true;
             server_name_.clear();
             state_ = state::ehlo_done;
-            co_return helo_rep;
+            co_return mailxx::ok();
         }
 
         capabilities_.entries.clear();
@@ -677,78 +1135,111 @@ private:
         capabilities_known_ = true;
         helo_only_ = false;
         state_ = state::ehlo_done;
-        co_return rep;
+        co_return mailxx::ok();
     }
 
-    awaitable<void> start_tls_impl(ssl::context& context, std::string sni)
+    awaitable<mailxx::result<void>> start_tls_impl(ssl::context& context, std::string sni)
     {
         if (!has_greeting())
-            throw error("STARTTLS requires a greeting.", "");
+            co_return fail_void(errc::smtp_invalid_state, "STARTTLS requires a greeting.", state_detail("STARTTLS"));
         if (state_ == state::tls || state_ == state::authenticated)
-            throw error("STARTTLS is already active.", "");
+            co_return fail_void(errc::smtp_invalid_state, "STARTTLS is already active.", state_detail("STARTTLS"));
         if (capabilities_known_ && !capabilities_.supports("STARTTLS"))
-            throw error("STARTTLS not supported.", "Server did not advertise STARTTLS.");
+            co_return fail_void(errc::smtp_bad_reply, "STARTTLS not supported.", command_detail("STARTTLS"));
 
-        reply rep = co_await command_impl("STARTTLS");
+        auto rep_res = co_await command_impl("STARTTLS");
+        if (!rep_res)
+            co_return mailxx::fail<void>(std::move(rep_res).error());
+        reply rep = std::move(*rep_res);
         if (rep.status != 220)
-            throw error("STARTTLS failure.", rep.message());
+            co_return smtp_fail<void>(command_kind::starttls, rep, "STARTTLS");
 
         dialog_type& dlg = dialog();
         const std::size_t max_len = dlg.max_line_length();
         const auto timeout = dlg.timeout();
 
         mailxx::net::upgradable_stream stream = std::move(dlg.stream());
-        std::string resolved_sni = resolve_sni(remote_host_, std::move(sni));
-        co_await stream.start_tls(context, std::move(resolved_sni), options_.tls);
+        auto resolved_sni = resolve_sni(remote_host_, std::move(sni));
+        if (!resolved_sni)
+            co_return mailxx::fail<void>(std::move(resolved_sni).error());
+        auto tls_res = co_await stream.start_tls(context, std::move(*resolved_sni), options_.tls);
+        if (!tls_res)
+        {
+            auto err = tls_res.error();
+            if (err.detail.empty())
+            {
+                mailxx::detail::error_detail detail;
+                append_peer_detail(detail);
+                err.detail = std::move(detail).str();
+            }
+            co_return mailxx::fail<void>(std::move(err));
+        }
 
         dialog_.emplace(std::move(stream), max_len, timeout);
+        dialog_->set_peer(saved_host_, saved_service_);
         configure_trace();
         state_ = state::tls;
         reset_capabilities();
+        co_return mailxx::ok();
     }
 
-    awaitable<void> authenticate_impl(const std::string& username, const std::string& password, auth_method method)
+    awaitable<mailxx::result<void>> authenticate_impl(const std::string& username, const std::string& password, auth_method method)
     {
-        mailxx::detail::ensure_no_crlf_or_nul(username, "username");
-        mailxx::detail::ensure_no_crlf_or_nul(password, "password");
+        {
+            auto check = validate_no_crlf_or_nul(username, "username");
+            if (!check)
+                co_return check;
+        }
+        {
+            auto check = validate_no_crlf_or_nul(password, "password");
+            if (!check)
+                co_return check;
+        }
         if (!has_greeting())
-            throw error("Authentication requires a greeting.", "");
+            co_return fail_void(errc::smtp_invalid_state, "Authentication requires a greeting.", state_detail("AUTH"));
         if (!has_helo_or_ehlo())
-            throw error("Authentication requires EHLO/HELO.", "");
+            co_return fail_void(errc::smtp_invalid_state, "Authentication requires EHLO/HELO.", state_detail("AUTH"));
         if (state_ == state::authenticated)
-            throw error("Already authenticated.", "");
+            co_return fail_void(errc::smtp_invalid_state, "Already authenticated.", state_detail("AUTH"));
         if (!capabilities_known_)
-            throw error("Server capabilities unknown; call EHLO before AUTH.", "");
-        enforce_auth_tls_policy();
+            co_return fail_void(errc::smtp_invalid_state,
+                "Server capabilities unknown; call EHLO before AUTH.", state_detail("AUTH"));
+        auto tls_policy = enforce_auth_tls_policy();
+        if (!tls_policy)
+            co_return tls_policy;
 
         const auto* auth_params = capabilities_.parameters("AUTH");
         if (auth_params == nullptr)
-            throw error("AUTH not supported.", "Server did not advertise AUTH.");
+            co_return fail_void(errc::smtp_auth_failed, "AUTH not supported.", command_detail("AUTH"));
 
-        const auth_method resolved = resolve_auth_method(method, *auth_params, password);
+        auto resolved_res = resolve_auth_method(method, *auth_params, password);
+        if (!resolved_res)
+            co_return mailxx::fail<void>(std::move(resolved_res).error());
+        const auth_method resolved = *resolved_res;
         switch (resolved)
         {
             case auth_method::auto_detect:
-                throw error("AUTH auto-detect resolution failed.", "");
+                co_return fail_void(errc::smtp_auth_failed, "AUTH auto-detect resolution failed.", command_detail("AUTH"));
             case auth_method::plain:
-                co_await authenticate_plain_impl(username, password);
+                MAILXX_TRY_CO_AWAIT(authenticate_plain_impl(username, password));
                 break;
             case auth_method::login:
-                co_await authenticate_login_impl(username, password);
+                MAILXX_TRY_CO_AWAIT(authenticate_login_impl(username, password));
                 break;
             case auth_method::xoauth2:
-                co_await authenticate_xoauth2_impl(username, password);
+                MAILXX_TRY_CO_AWAIT(authenticate_xoauth2_impl(username, password));
                 break;
         }
         state_ = state::authenticated;
+        co_return mailxx::ok();
     }
 
-    awaitable<reply> send_impl(const mailxx::message& msg, const envelope& env)
+    awaitable<mailxx::result<reply>> send_impl(const mailxx::message& msg, const envelope& env)
     {
         if (!has_greeting())
-            throw error("Send requires a greeting.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
-            throw error("Send requires EHLO/HELO.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires EHLO/HELO.", state_detail("SEND"));
 
         std::string mail_from = env.mail_from;
         if (mail_from.empty())
@@ -764,48 +1255,228 @@ private:
             }
         }
         if (mail_from.empty())
-            throw error("Mail sender is missing.", "");
-        mailxx::detail::ensure_no_crlf_or_nul(mail_from, "mail_from");
+            co_return fail<reply>(errc::smtp_invalid_state, "Mail sender is missing.", command_detail("MAIL FROM"));
+        {
+            auto check = validate_no_crlf_or_nul(mail_from, "mail_from");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
+        }
 
         std::vector<std::string> recipients = env.rcpt_to;
         if (recipients.empty())
             recipients = collect_recipients(msg);
         recipients = dedup(recipients);
         if (recipients.empty())
-            throw error("No recipients.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "No recipients.", command_detail("RCPT TO"));
 
-        mail_data_info info = prepare_mail_data(msg, mail_from, recipients);
+        auto info_res = prepare_mail_data(msg, mail_from, recipients);
+        if (!info_res)
+            co_return mailxx::fail<reply>(std::move(info_res).error());
+        mail_data_info info = std::move(*info_res);
 
         std::string cmd;
         mailxx::detail::append_sv(cmd, "MAIL FROM: ");
         mailxx::detail::append_angle_addr(cmd, mail_from);
         append_mail_extensions(cmd, info);
-        reply rep = co_await command_impl(cmd);
+        auto rep_res = co_await command_impl(cmd);
+        if (!rep_res)
+            co_return rep_res;
+        reply rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail sender rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::mail_from, rep, cmd);
 
         for (const auto& rcpt : recipients)
         {
-            mailxx::detail::ensure_no_crlf_or_nul(rcpt, "rcpt_to");
+            auto check = validate_no_crlf_or_nul(rcpt, "rcpt_to");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
             cmd.clear();
             mailxx::detail::append_sv(cmd, "RCPT TO: ");
             mailxx::detail::append_angle_addr(cmd, rcpt);
-            rep = co_await command_impl(cmd);
+            rep_res = co_await command_impl(cmd);
+            if (!rep_res)
+                co_return rep_res;
+            rep = std::move(*rep_res);
             if (!rep.is_positive_completion())
-                throw error("Mail recipient rejection.", rep.message());
+                co_return smtp_fail<reply>(command_kind::rcpt_to, rep, cmd);
         }
 
-        rep = co_await command_impl("DATA");
+        rep_res = co_await command_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_intermediate())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_cmd, rep, "DATA");
 
         append_smtp_data_terminator(info.data);
         trace_payload("DATA", info.data.size());
-        co_await dialog().write_raw(buffer(info.data), use_awaitable);
+        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(info.data)));
 
-        rep = co_await read_reply_impl();
+        rep_res = co_await read_reply_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_body, rep, "DATA");
+
+        co_return rep;
+    }
+
+    awaitable<mailxx::result<reply>> send_streaming_impl(const envelope& env, const mailxx::message& msg)
+    {
+        if (!has_greeting())
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
+        if (!has_helo_or_ehlo())
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires EHLO/HELO.", state_detail("SEND"));
+
+        std::string mail_from = env.mail_from;
+        if (mail_from.empty())
+        {
+            const auto sender = msg.sender();
+            if (!sender.address.empty())
+                mail_from = sender.address;
+            else
+            {
+                const auto from = msg.from();
+                if (!from.addresses.empty())
+                    mail_from = from.addresses.front().address;
+            }
+        }
+        if (mail_from.empty())
+            co_return fail<reply>(errc::smtp_invalid_state, "Mail sender is missing.", command_detail("MAIL FROM"));
+        {
+            auto check = validate_no_crlf_or_nul(mail_from, "mail_from");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
+        }
+
+        std::vector<std::string> recipients = env.rcpt_to;
+        if (recipients.empty())
+            recipients = collect_recipients(msg);
+        recipients = dedup(recipients);
+        if (recipients.empty())
+            co_return fail<reply>(errc::smtp_invalid_state, "No recipients.", command_detail("RCPT TO"));
+
+        // First pass: count size and detect 8-bit/CRLF ending with dot-stuffing applied.
+        smtp_dot_stuffing_sink counting_sink;
+        message_format_options_t fmt_opts;
+        fmt_opts.dot_escape = false; // Dot-stuffing is handled here.
+        fmt_opts.add_bcc_header = false;
+        auto fmt_res = msg.format_to_result(counting_sink, fmt_opts);
+        if (!fmt_res)
+            co_return mailxx::fail<reply>(std::move(fmt_res).error());
+        counting_sink.finalize();
+        const bool ends_with_crlf = counting_sink.ends_with_crlf();
+        mail_data_info info;
+        info.size = counting_sink.size() + (ends_with_crlf ? 3u : 5u);
+        info.has_8bit = counting_sink.has_8bit();
+        info.needs_utf8 = contains_utf8(mail_from);
+        if (!info.needs_utf8)
+        {
+            for (const auto& rcpt : recipients)
+            {
+                if (contains_utf8(rcpt))
+                {
+                    info.needs_utf8 = true;
+                    break;
+                }
+            }
+        }
+
+        std::string cmd;
+        mailxx::detail::append_sv(cmd, "MAIL FROM: ");
+        mailxx::detail::append_angle_addr(cmd, mail_from);
+        append_mail_extensions(cmd, info);
+        auto rep_res = co_await command_impl(cmd);
+        if (!rep_res)
+            co_return rep_res;
+        reply rep = std::move(*rep_res);
+        if (!rep.is_positive_completion())
+            co_return smtp_fail<reply>(command_kind::mail_from, rep, cmd);
+
+        for (const auto& rcpt : recipients)
+        {
+            auto check = validate_no_crlf_or_nul(rcpt, "rcpt_to");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
+            cmd.clear();
+            mailxx::detail::append_sv(cmd, "RCPT TO: ");
+            mailxx::detail::append_angle_addr(cmd, rcpt);
+            rep_res = co_await command_impl(cmd);
+            if (!rep_res)
+                co_return rep_res;
+            rep = std::move(*rep_res);
+            if (!rep.is_positive_completion())
+                co_return smtp_fail<reply>(command_kind::rcpt_to, rep, cmd);
+        }
+
+        rep_res = co_await command_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
+        if (!rep.is_positive_intermediate())
+            co_return smtp_fail<reply>(command_kind::data_cmd, rep, "DATA");
+
+        // Second pass: stream the message body through a blocking queue.
+        streaming_queue queue;
+        smtp_dot_stuffing_sink streaming_sink(8192, &queue);
+        std::exception_ptr producer_error;
+        std::thread producer([&, fmt_opts] {
+            try
+            {
+                auto res = msg.format_to_result(streaming_sink, fmt_opts);
+                if (!res)
+                {
+                    queue.set_error(res.error().message);
+                    return;
+                }
+                streaming_sink.finalize();
+                queue.set_done();
+            }
+            catch (...)
+            {
+                producer_error = std::current_exception();
+                queue.set_error("format exception");
+            }
+        });
+
+        std::string chunk;
+        while (queue.pop(chunk))
+        {
+            trace_payload("DATA", chunk.size());
+            auto write_res = co_await dialog().write_raw_r(buffer(chunk));
+            if (!write_res)
+            {
+                queue.set_done();
+                producer.join();
+                co_return mailxx::fail<reply>(std::move(write_res).error());
+            }
+        }
+        queue.set_done();
+        if (producer.joinable())
+            producer.join();
+        if (producer_error)
+        {
+            try { std::rethrow_exception(producer_error); }
+            catch (const std::exception& exc)
+            {
+                co_return fail<reply>(errc::smtp_invalid_state, "mime format error", exc.what());
+            }
+        }
+        if (queue.has_error())
+            co_return fail<reply>(errc::smtp_invalid_state, "mime format error", queue.error_msg());
+
+        std::string terminator = ends_with_crlf ? ".\r\n" : "\r\n.\r\n";
+        auto write_res = co_await dialog().write_raw_r(buffer(terminator));
+        if (!write_res)
+            co_return mailxx::fail<reply>(std::move(write_res).error());
+
+        rep_res = co_await read_reply_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
+        if (!rep.is_positive_completion())
+            co_return smtp_fail<reply>(command_kind::data_body, rep, "DATA");
 
         co_return rep;
     }
@@ -813,12 +1484,12 @@ private:
     /**
      * Send with DSN (RFC 3461) parameters.
      */
-    awaitable<reply> send_dsn_impl(const mailxx::message& msg, const envelope_dsn& env)
+    awaitable<mailxx::result<reply>> send_dsn_impl(const mailxx::message& msg, const envelope_dsn& env)
     {
         if (!has_greeting())
-            throw error("Send requires a greeting.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
-            throw error("Send requires EHLO/HELO.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires EHLO/HELO.", state_detail("SEND"));
 
         // Check DSN support if DSN options are active
         const bool dsn_active = env.dsn.ret != dsn_ret::none 
@@ -826,7 +1497,8 @@ private:
                              || !env.dsn.envid.empty();
         
         if (dsn_active && !supports_dsn())
-            throw error("DSN requested but not supported by server.", "");
+            co_return fail<reply>(errc::smtp_bad_reply,
+                "DSN requested but not supported by server.", command_detail("MAIL FROM"));
 
         std::string mail_from = env.mail_from;
         if (mail_from.empty())
@@ -842,17 +1514,24 @@ private:
             }
         }
         if (mail_from.empty())
-            throw error("Mail sender is missing.", "");
-        mailxx::detail::ensure_no_crlf_or_nul(mail_from, "mail_from");
+            co_return fail<reply>(errc::smtp_invalid_state, "Mail sender is missing.", command_detail("MAIL FROM"));
+        {
+            auto check = validate_no_crlf_or_nul(mail_from, "mail_from");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
+        }
 
         std::vector<std::string> recipients = env.rcpt_to;
         if (recipients.empty())
             recipients = collect_recipients(msg);
         recipients = dedup(recipients);
         if (recipients.empty())
-            throw error("No recipients.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "No recipients.", command_detail("RCPT TO"));
 
-        mail_data_info info = prepare_mail_data(msg, mail_from, recipients);
+        auto info_res = prepare_mail_data(msg, mail_from, recipients);
+        if (!info_res)
+            co_return mailxx::fail<reply>(std::move(info_res).error());
+        mail_data_info info = std::move(*info_res);
 
         // Build MAIL FROM with DSN parameters
         std::string cmd;
@@ -871,15 +1550,20 @@ private:
             // ENVID parameter
             if (!env.dsn.envid.empty())
             {
-                mailxx::detail::ensure_no_crlf_or_nul(env.dsn.envid, "dsn.envid");
+                auto check = validate_no_crlf_or_nul(env.dsn.envid, "dsn.envid");
+                if (!check)
+                    co_return mailxx::fail<reply>(std::move(check).error());
                 cmd += " ENVID=";
                 cmd += env.dsn.envid;
             }
         }
 
-        reply rep = co_await command_impl(cmd);
+        auto rep_res = co_await command_impl(cmd);
+        if (!rep_res)
+            co_return rep_res;
+        reply rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail sender rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::mail_from, rep, cmd);
 
         // Build NOTIFY string once
         std::string notify_str;
@@ -915,14 +1599,18 @@ private:
         std::string orcpt_suffix;
         if (dsn_active && !env.dsn.orcpt.empty())
         {
-            mailxx::detail::ensure_no_crlf_or_nul(env.dsn.orcpt, "dsn.orcpt");
+            auto check = validate_no_crlf_or_nul(env.dsn.orcpt, "dsn.orcpt");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
             orcpt_suffix = " ORCPT=rfc822;";
             orcpt_suffix += env.dsn.orcpt;
         }
 
         for (const auto& rcpt : recipients)
         {
-            mailxx::detail::ensure_no_crlf_or_nul(rcpt, "rcpt_to");
+            auto check = validate_no_crlf_or_nul(rcpt, "rcpt_to");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
             cmd.clear();
             mailxx::detail::append_sv(cmd, "RCPT TO: ");
             mailxx::detail::append_angle_addr(cmd, rcpt);
@@ -942,22 +1630,31 @@ private:
                 }
             }
             
-            rep = co_await command_impl(cmd);
+            rep_res = co_await command_impl(cmd);
+            if (!rep_res)
+                co_return rep_res;
+            rep = std::move(*rep_res);
             if (!rep.is_positive_completion())
-                throw error("Mail recipient rejection.", rep.message());
+                co_return smtp_fail<reply>(command_kind::rcpt_to, rep, cmd);
         }
 
-        rep = co_await command_impl("DATA");
+        rep_res = co_await command_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_intermediate())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_cmd, rep, "DATA");
 
         append_smtp_data_terminator(info.data);
         trace_payload("DATA", info.data.size());
-        co_await dialog().write_raw(buffer(info.data), use_awaitable);
+        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(info.data)));
 
-        rep = co_await read_reply_impl();
+        rep_res = co_await read_reply_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_body, rep, "DATA");
 
         co_return rep;
     }
@@ -965,12 +1662,12 @@ private:
     /**
      * Send with extended envelope (SIZE, 8BITMIME, SMTPUTF8, DSN).
      */
-    awaitable<reply> send_ext_impl(const mailxx::message& msg, const envelope_ext& env)
+    awaitable<mailxx::result<reply>> send_ext_impl(const mailxx::message& msg, const envelope_ext& env)
     {
         if (!has_greeting())
-            throw error("Send requires a greeting.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
-            throw error("Send requires EHLO/HELO.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires EHLO/HELO.", state_detail("SEND"));
 
         // Resolve sender
         std::string mail_from = env.mail_from;
@@ -987,8 +1684,12 @@ private:
             }
         }
         if (mail_from.empty())
-            throw error("Mail sender is missing.", "");
-        mailxx::detail::ensure_no_crlf_or_nul(mail_from, "mail_from");
+            co_return fail<reply>(errc::smtp_invalid_state, "Mail sender is missing.", command_detail("MAIL FROM"));
+        {
+            auto check = validate_no_crlf_or_nul(mail_from, "mail_from");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
+        }
 
         // Resolve recipients
         std::vector<std::string> recipients = env.rcpt_to;
@@ -996,27 +1697,32 @@ private:
             recipients = collect_recipients(msg);
         recipients = dedup(recipients);
         if (recipients.empty())
-            throw error("No recipients.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "No recipients.", command_detail("RCPT TO"));
 
         // Format message to get size and detect content type
         std::string data;
         message_format_options_t opts;
         opts.dot_escape = true;
         opts.add_bcc_header = false;
-        msg.format(data, opts);
+        auto fmt_res = msg.format_result(data, opts);
+        if (!fmt_res)
+            co_return mailxx::fail<reply>(std::move(fmt_res).error());
         
         const std::size_t msg_size = data.size() + 5;  // +5 for \r\n.\r\n
 
         // Check SIZE limit
         if (supports_size())
         {
-            const auto limit = get_size_limit();
-            if (limit.exceeds(msg_size))
-            {
-                throw error("Message exceeds server size limit.", 
-                    "Size: " + std::to_string(msg_size) + ", Limit: " + std::to_string(limit.max_size));
+                const auto limit = get_size_limit();
+                if (limit.exceeds(msg_size))
+                {
+                    mailxx::detail::error_detail detail;
+                    detail.add_int("size", static_cast<std::uint64_t>(msg_size));
+                    detail.add_int("limit", static_cast<std::uint64_t>(limit.max_size));
+                    append_peer_detail(detail);
+                    co_return fail<reply>(errc::smtp_invalid_state, "Message exceeds server size limit.", detail.str());
+                }
             }
-        }
 
         // Detect if message contains 8-bit content
         const bool has_8bit = contains_8bit(data);
@@ -1028,10 +1734,12 @@ private:
 
         // Validate extension requirements
         if (has_8bit && env.body == body_type::bit8 && !supports_8bitmime())
-            throw error("8BITMIME required but not supported by server.", "");
+            co_return fail<reply>(errc::smtp_bad_reply,
+                "8BITMIME required but not supported by server.", command_detail("MAIL FROM"));
         
         if (needs_utf8 && !supports_smtputf8())
-            throw error("SMTPUTF8 required but not supported by server.", "");
+            co_return fail<reply>(errc::smtp_bad_reply,
+                "SMTPUTF8 required but not supported by server.", command_detail("MAIL FROM"));
 
         // Build MAIL FROM command with extensions
         std::string cmd;
@@ -1069,7 +1777,8 @@ private:
         if (env.dsn.enabled())
         {
             if (!supports_dsn())
-                throw error("DSN requested but not supported by server.", "");
+                co_return fail<reply>(errc::smtp_bad_reply,
+                    "DSN requested but not supported by server.", command_detail("MAIL FROM"));
             
             if (env.dsn.ret != dsn_ret::none)
             {
@@ -1079,15 +1788,20 @@ private:
             
             if (!env.dsn.envid.empty())
             {
-                mailxx::detail::ensure_no_crlf_or_nul(env.dsn.envid, "dsn.envid");
+                auto check = validate_no_crlf_or_nul(env.dsn.envid, "dsn.envid");
+                if (!check)
+                    co_return mailxx::fail<reply>(std::move(check).error());
                 cmd += " ENVID=";
                 cmd += env.dsn.envid;
             }
         }
 
-        reply rep = co_await command_impl(cmd);
+        auto rep_res = co_await command_impl(cmd);
+        if (!rep_res)
+            co_return rep_res;
+        reply rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail sender rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::mail_from, rep, cmd);
 
         // Build DSN NOTIFY/ORCPT strings
         std::string notify_str;
@@ -1100,7 +1814,9 @@ private:
         
         if (env.dsn.enabled() && !env.dsn.orcpt.empty())
         {
-            mailxx::detail::ensure_no_crlf_or_nul(env.dsn.orcpt, "dsn.orcpt");
+            auto check = validate_no_crlf_or_nul(env.dsn.orcpt, "dsn.orcpt");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
             orcpt_suffix = " ORCPT=rfc822;";
             orcpt_suffix += env.dsn.orcpt;
         }
@@ -1108,7 +1824,9 @@ private:
         // RCPT TO commands
         for (const auto& rcpt : recipients)
         {
-            mailxx::detail::ensure_no_crlf_or_nul(rcpt, "rcpt_to");
+            auto check = validate_no_crlf_or_nul(rcpt, "rcpt_to");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
             cmd.clear();
             mailxx::detail::append_sv(cmd, "RCPT TO: ");
             mailxx::detail::append_angle_addr(cmd, rcpt);
@@ -1128,35 +1846,44 @@ private:
                 }
             }
             
-            rep = co_await command_impl(cmd);
+            rep_res = co_await command_impl(cmd);
+            if (!rep_res)
+                co_return rep_res;
+            rep = std::move(*rep_res);
             if (!rep.is_positive_completion())
-                throw error("Mail recipient rejection.", rep.message());
+                co_return smtp_fail<reply>(command_kind::rcpt_to, rep, cmd);
         }
 
-        rep = co_await command_impl("DATA");
+        rep_res = co_await command_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_intermediate())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_cmd, rep, "DATA");
 
         data += "\r\n.\r\n";
         trace_payload("DATA", data.size());
-        co_await dialog().write_raw(buffer(data), use_awaitable);
+        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(data)));
 
-        rep = co_await read_reply_impl();
+        rep_res = co_await read_reply_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_body, rep, "DATA");
 
         co_return rep;
     }
 
-    awaitable<reply> send_with_progress_impl(
+    awaitable<mailxx::result<reply>> send_with_progress_impl(
         const mailxx::message& msg, 
         const envelope& env,
         progress_callback_t progress)
     {
         if (!has_greeting())
-            throw error("Send requires a greeting.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
-            throw error("Send requires EHLO/HELO.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires EHLO/HELO.", state_detail("SEND"));
 
         std::string mail_from = env.mail_from;
         if (mail_from.empty())
@@ -1172,40 +1899,58 @@ private:
             }
         }
         if (mail_from.empty())
-            throw error("Mail sender is missing.", "");
-        mailxx::detail::ensure_no_crlf_or_nul(mail_from, "mail_from");
+            co_return fail<reply>(errc::smtp_invalid_state, "Mail sender is missing.", command_detail("MAIL FROM"));
+        {
+            auto check = validate_no_crlf_or_nul(mail_from, "mail_from");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
+        }
 
         std::vector<std::string> recipients = env.rcpt_to;
         if (recipients.empty())
             recipients = collect_recipients(msg);
         recipients = dedup(recipients);
         if (recipients.empty())
-            throw error("No recipients.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "No recipients.", command_detail("RCPT TO"));
 
-        mail_data_info info = prepare_mail_data(msg, mail_from, recipients);
+        auto info_res = prepare_mail_data(msg, mail_from, recipients);
+        if (!info_res)
+            co_return mailxx::fail<reply>(std::move(info_res).error());
+        mail_data_info info = std::move(*info_res);
 
         std::string cmd;
         mailxx::detail::append_sv(cmd, "MAIL FROM: ");
         mailxx::detail::append_angle_addr(cmd, mail_from);
         append_mail_extensions(cmd, info);
-        reply rep = co_await command_impl(cmd);
+        auto rep_res = co_await command_impl(cmd);
+        if (!rep_res)
+            co_return rep_res;
+        reply rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail sender rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::mail_from, rep, cmd);
 
         for (const auto& rcpt : recipients)
         {
-            mailxx::detail::ensure_no_crlf_or_nul(rcpt, "rcpt_to");
+            auto check = validate_no_crlf_or_nul(rcpt, "rcpt_to");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
             cmd.clear();
             mailxx::detail::append_sv(cmd, "RCPT TO: ");
             mailxx::detail::append_angle_addr(cmd, rcpt);
-            rep = co_await command_impl(cmd);
+            rep_res = co_await command_impl(cmd);
+            if (!rep_res)
+                co_return rep_res;
+            rep = std::move(*rep_res);
             if (!rep.is_positive_completion())
-                throw error("Mail recipient rejection.", rep.message());
+                co_return smtp_fail<reply>(command_kind::rcpt_to, rep, cmd);
         }
 
-        rep = co_await command_impl("DATA");
+        rep_res = co_await command_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_intermediate())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_cmd, rep, "DATA");
 
         append_smtp_data_terminator(info.data);
         trace_payload("DATA", info.data.size());
@@ -1218,7 +1963,7 @@ private:
         for (size_t offset = 0; offset < info.data.size(); offset += chunk_size)
         {
             size_t len = std::min(chunk_size, info.data.size() - offset);
-            co_await dialog().write_raw(buffer(info.data.data() + offset, len), use_awaitable);
+            MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(info.data.data() + offset, len)));
             
             bytes_sent += len;
             
@@ -1232,9 +1977,12 @@ private:
             }
         }
 
-        rep = co_await read_reply_impl();
+        rep_res = co_await read_reply_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_body, rep, "DATA");
 
         co_return rep;
     }
@@ -1243,12 +1991,12 @@ private:
      * PIPELINING implementation (RFC 2920).
      * Sends MAIL FROM and all RCPT TO in one batch, then reads all responses.
      */
-    awaitable<reply> send_pipelined_impl(const mailxx::message& msg, const envelope& env)
+    awaitable<mailxx::result<reply>> send_pipelined_impl(const mailxx::message& msg, const envelope& env)
     {
         if (!has_greeting())
-            throw error("Send requires a greeting.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
-            throw error("Send requires EHLO/HELO.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "Send requires EHLO/HELO.", state_detail("SEND"));
 
         std::string mail_from = env.mail_from;
         if (mail_from.empty())
@@ -1264,17 +2012,24 @@ private:
             }
         }
         if (mail_from.empty())
-            throw error("Mail sender is missing.", "");
-        mailxx::detail::ensure_no_crlf_or_nul(mail_from, "mail_from");
+            co_return fail<reply>(errc::smtp_invalid_state, "Mail sender is missing.", command_detail("MAIL FROM"));
+        {
+            auto check = validate_no_crlf_or_nul(mail_from, "mail_from");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
+        }
 
         std::vector<std::string> recipients = env.rcpt_to;
         if (recipients.empty())
             recipients = collect_recipients(msg);
         recipients = dedup(recipients);
         if (recipients.empty())
-            throw error("No recipients.", "");
+            co_return fail<reply>(errc::smtp_invalid_state, "No recipients.", command_detail("RCPT TO"));
 
-        mail_data_info info = prepare_mail_data(msg, mail_from, recipients);
+        auto info_res = prepare_mail_data(msg, mail_from, recipients);
+        if (!info_res)
+            co_return mailxx::fail<reply>(std::move(info_res).error());
+        mail_data_info info = std::move(*info_res);
 
         // ========== PIPELINING: Send all commands first ==========
         
@@ -1283,83 +2038,116 @@ private:
         mailxx::detail::append_sv(cmd, "MAIL FROM: ");
         mailxx::detail::append_angle_addr(cmd, mail_from);
         append_mail_extensions(cmd, info);
-        co_await dialog().write_line(cmd, use_awaitable);
+        MAILXX_TRY_CO_AWAIT(dialog().write_line_r(cmd));
+        std::string mail_command = cmd;
 
         // Send all RCPT TO commands without waiting for responses
+        std::vector<std::string> rcpt_commands;
+        rcpt_commands.reserve(recipients.size());
         for (const auto& rcpt : recipients)
         {
-            mailxx::detail::ensure_no_crlf_or_nul(rcpt, "rcpt_to");
+            auto check = validate_no_crlf_or_nul(rcpt, "rcpt_to");
+            if (!check)
+                co_return mailxx::fail<reply>(std::move(check).error());
             cmd.clear();
             mailxx::detail::append_sv(cmd, "RCPT TO: ");
             mailxx::detail::append_angle_addr(cmd, rcpt);
-            co_await dialog().write_line(cmd, use_awaitable);
+            rcpt_commands.push_back(cmd);
+            MAILXX_TRY_CO_AWAIT(dialog().write_line_r(cmd));
         }
 
         // ========== PIPELINING: Now read all responses ==========
         
         // Read MAIL FROM response
-        reply rep = co_await read_reply_impl();
+        auto rep_res = co_await read_reply_impl(mail_command);
+        if (!rep_res)
+            co_return rep_res;
+        reply rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail sender rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::mail_from, rep, mail_command);
 
         // Read all RCPT TO responses
         std::vector<std::string> accepted_recipients;
         std::vector<std::pair<std::string, reply>> rejected_recipients;
         
-        for (const auto& rcpt : recipients)
+        for (std::size_t i = 0; i < rcpt_commands.size(); ++i)
         {
-            rep = co_await read_reply_impl();
+            rep_res = co_await read_reply_impl(rcpt_commands[i]);
+            if (!rep_res)
+                co_return rep_res;
+            rep = std::move(*rep_res);
             if (rep.is_positive_completion())
             {
-                accepted_recipients.push_back(rcpt);
+                accepted_recipients.push_back(recipients[i]);
             }
             else
             {
-                rejected_recipients.emplace_back(rcpt, rep);
+                rejected_recipients.emplace_back(rcpt_commands[i], rep);
             }
         }
 
         // If all recipients rejected, fail
         if (accepted_recipients.empty())
-            throw error("All recipients rejected.", rejected_recipients.front().second.message());
+        {
+            if (!rejected_recipients.empty())
+            {
+                const auto& rejected = rejected_recipients.front();
+                co_return smtp_fail<reply>(command_kind::rcpt_to, rejected.second, rejected.first);
+            }
+            co_return fail<reply>(errc::smtp_rejected_recipient,
+                std::string(smtp_reply_message(command_kind::rcpt_to)),
+                command_detail("RCPT TO"));
+        }
 
         // Send DATA command (must wait for this response before sending data)
-        rep = co_await command_impl("DATA");
+        rep_res = co_await command_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_intermediate())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_cmd, rep, "DATA");
 
         // Format and send message body
         append_smtp_data_terminator(info.data);
         trace_payload("DATA", info.data.size());
-        co_await dialog().write_raw(buffer(info.data), use_awaitable);
+        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(info.data)));
 
-        rep = co_await read_reply_impl();
+        rep_res = co_await read_reply_impl("DATA");
+        if (!rep_res)
+            co_return rep_res;
+        rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Mail message rejection.", rep.message());
+            co_return smtp_fail<reply>(command_kind::data_body, rep, "DATA");
 
         co_return rep;
     }
 
-    awaitable<reply> command_impl(std::string_view line)
+    awaitable<mailxx::result<reply>> command_impl(std::string_view line)
     {
-        co_await dialog().write_line(line, use_awaitable);
-        co_return co_await read_reply_impl();
+        std::string command(line);
+        MAILXX_TRY_CO_AWAIT(dialog().write_line_r(command));
+        co_return co_await read_reply_impl(command);
     }
 
-    awaitable<reply> read_reply_impl()
+    awaitable<mailxx::result<reply>> read_reply_impl(std::string_view command)
     {
         reply rep;
 
         while (true)
         {
-            std::string line = co_await dialog().read_line(use_awaitable);
+            auto line_res = co_await dialog().read_line_r();
+            if (!line_res)
+                co_return mailxx::fail<reply>(std::move(line_res).error());
+            std::string line = std::move(*line_res);
             if (line.size() < 3)
-                throw error("Parsing server failure.", line);
+                co_return fail<reply>(errc::smtp_bad_reply,
+                    "Parsing server failure.", parse_error_detail(command, line));
 
             if (!std::isdigit(static_cast<unsigned char>(line[0])) ||
                 !std::isdigit(static_cast<unsigned char>(line[1])) ||
                 !std::isdigit(static_cast<unsigned char>(line[2])))
-                throw error("Parsing server failure.", line);
+                co_return fail<reply>(errc::smtp_bad_reply,
+                    "Parsing server failure.", parse_error_detail(command, line));
 
             const int code = (line[0] - '0') * 100 + (line[1] - '0') * 10 + (line[2] - '0');
 
@@ -1369,7 +2157,8 @@ private:
                 if (line[3] == '-')
                     last = false;
                 else if (line[3] != ' ')
-                    throw error("Parsing server failure.", line);
+                    co_return fail<reply>(errc::smtp_bad_reply,
+                        "Parsing server failure.", parse_error_detail(command, line));
             }
 
             std::string text;
@@ -1379,7 +2168,8 @@ private:
             if (rep.status == 0)
                 rep.status = code;
             else if (rep.status != code)
-                throw error("Parsing server failure.", line);
+                co_return fail<reply>(errc::smtp_bad_reply,
+                    "Parsing server failure.", parse_error_detail(command, line));
 
             rep.lines.push_back(std::move(text));
 
@@ -1390,7 +2180,7 @@ private:
         co_return rep;
     }
 
-    awaitable<void> authenticate_plain_impl(const std::string& username, const std::string& password)
+    awaitable<mailxx::result<void>> authenticate_plain_impl(const std::string& username, const std::string& password)
     {
         std::string auth;
         auth.reserve(username.size() + password.size() + 2);
@@ -1401,62 +2191,113 @@ private:
 
         const auto policy = static_cast<std::string::size_type>(mailxx::codec::line_len_policy_t::NONE);
         mailxx::base64 b64(policy, policy);
-        const auto encoded_lines = b64.encode(auth);
-        const std::string encoded = join_lines(encoded_lines);
+        auto encoded_res = b64.encode(std::string_view(auth));
+        if (!encoded_res)
+            co_return fail_void(errc::smtp_auth_failed,
+                "AUTH PLAIN encoding failure.", format_codec_error(encoded_res.error()));
+        std::string encoded = std::move(*encoded_res);
 
-        reply rep = co_await command_impl("AUTH PLAIN " + encoded);
+        auto rep_res = co_await command_impl("AUTH PLAIN " + encoded);
+        if (!rep_res)
+            co_return mailxx::fail<void>(std::move(rep_res).error());
+        reply rep = std::move(*rep_res);
         if (rep.status == 334)
-            rep = co_await command_impl(encoded);
+        {
+            rep_res = co_await command_impl(encoded);
+            if (!rep_res)
+                co_return mailxx::fail<void>(std::move(rep_res).error());
+            rep = std::move(*rep_res);
+        }
 
         if (!rep.is_positive_completion())
-            throw error("Authentication rejection.", rep.message());
+            co_return smtp_fail<void>(command_kind::auth, rep, "AUTH PLAIN");
+        co_return mailxx::ok();
     }
 
-    awaitable<void> authenticate_login_impl(const std::string& username, const std::string& password)
+    awaitable<mailxx::result<void>> authenticate_login_impl(const std::string& username, const std::string& password)
     {
-        reply rep = co_await command_impl("AUTH LOGIN");
+        auto rep_res = co_await command_impl("AUTH LOGIN");
+        if (!rep_res)
+            co_return mailxx::fail<void>(std::move(rep_res).error());
+        reply rep = std::move(*rep_res);
         if (rep.status != 334)
-            throw error("Authentication rejection.", rep.message());
+            co_return smtp_fail<void>(command_kind::auth, rep, "AUTH LOGIN");
 
         const auto policy = static_cast<std::string::size_type>(mailxx::codec::line_len_policy_t::NONE);
         mailxx::base64 b64(policy, policy);
-        std::string encoded_user = join_lines(b64.encode(username));
-        std::string encoded_pass = join_lines(b64.encode(password));
+        auto encoded_user_res = b64.encode(std::string_view(username));
+        if (!encoded_user_res)
+            co_return fail_void(errc::smtp_auth_failed,
+                "AUTH LOGIN username encoding failure.", format_codec_error(encoded_user_res.error()));
+        auto encoded_pass_res = b64.encode(std::string_view(password));
+        if (!encoded_pass_res)
+            co_return fail_void(errc::smtp_auth_failed,
+                "AUTH LOGIN password encoding failure.", format_codec_error(encoded_pass_res.error()));
+        std::string encoded_user = std::move(*encoded_user_res);
+        std::string encoded_pass = std::move(*encoded_pass_res);
 
-        rep = co_await command_impl(encoded_user);
+        rep_res = co_await command_impl(encoded_user);
+        if (!rep_res)
+            co_return mailxx::fail<void>(std::move(rep_res).error());
+        rep = std::move(*rep_res);
         if (rep.status != 334)
-            throw error("Username rejection.", rep.message());
+            co_return smtp_fail<void>(command_kind::auth, rep, "AUTH LOGIN");
 
-        rep = co_await command_impl(encoded_pass);
+        rep_res = co_await command_impl(encoded_pass);
+        if (!rep_res)
+            co_return mailxx::fail<void>(std::move(rep_res).error());
+        rep = std::move(*rep_res);
         if (!rep.is_positive_completion())
-            throw error("Password rejection.", rep.message());
+            co_return smtp_fail<void>(command_kind::auth, rep, "AUTH LOGIN");
+        co_return mailxx::ok();
     }
 
-    awaitable<void> authenticate_xoauth2_impl(const std::string& username, const std::string& access_token)
+    awaitable<mailxx::result<void>> authenticate_xoauth2_impl(const std::string& username, const std::string& access_token)
     {
-        mailxx::detail::ensure_no_crlf_or_nul(username, "username");
-        mailxx::detail::ensure_no_crlf_or_nul(access_token, "access_token");
-        const std::string encoded = sasl::encode_xoauth2(username, access_token);
+        {
+            auto check = validate_no_crlf_or_nul(username, "username");
+            if (!check)
+                co_return check;
+        }
+        {
+            auto check = validate_no_crlf_or_nul(access_token, "access_token");
+            if (!check)
+                co_return check;
+        }
+        auto encoded_res = sasl::encode_xoauth2(username, access_token);
+        if (!encoded_res)
+            co_return fail_void(errc::smtp_auth_failed,
+                "AUTH XOAUTH2 encoding failure.", format_codec_error(encoded_res.error()));
+        std::string encoded = std::move(*encoded_res);
 
-        reply rep = co_await command_impl("AUTH XOAUTH2 " + encoded);
+        auto rep_res = co_await command_impl("AUTH XOAUTH2 " + encoded);
+        if (!rep_res)
+            co_return mailxx::fail<void>(std::move(rep_res).error());
+        reply rep = std::move(*rep_res);
 
         // Handle continuation response (server wants more data or is sending error details)
         if (rep.status == 334)
         {
             // Send empty response to get the actual error
-            rep = co_await command_impl("");
+            rep_res = co_await command_impl("");
+            if (!rep_res)
+                co_return mailxx::fail<void>(std::move(rep_res).error());
+            rep = std::move(*rep_res);
         }
 
         if (!rep.is_positive_completion())
-            throw error("XOAUTH2 authentication failure.", rep.message());
+            co_return smtp_fail<void>(command_kind::auth, rep, "AUTH XOAUTH2");
+        co_return mailxx::ok();
     }
 
-    static std::string join_lines(const std::vector<std::string>& lines)
+    static std::string format_codec_error(const error_info& err)
     {
-        std::string out;
-        for (const auto& line : lines)
-            out += line;
-        return out;
+        if (err.detail.empty())
+            return err.message;
+        std::string detail = err.message;
+        detail += ": ";
+        detail += err.detail;
+        return detail;
     }
 
     static std::string default_hostname()
@@ -1640,35 +2481,71 @@ private:
         return false;
     }
 
-    auth_method resolve_auth_method(auth_method method, const std::vector<std::string>& params, std::string_view secret)
+    mailxx::result<auth_method> resolve_auth_method(
+        auth_method method,
+        const std::vector<std::string>& params,
+        std::string_view secret)
     {
         const bool has_xoauth2 = auth_mechanism_supported(params, "XOAUTH2");
         const bool has_plain = auth_mechanism_supported(params, "PLAIN");
         const bool has_login = auth_mechanism_supported(params, "LOGIN");
+        auto auth_detail = [&]()
+        {
+            std::string detail = command_detail("AUTH");
+            if (!params.empty())
+            {
+                if (!detail.empty())
+                    detail += "\n";
+                detail += "mechanisms: ";
+                for (std::size_t i = 0; i < params.size(); ++i)
+                {
+                    if (i > 0)
+                        detail.push_back(' ');
+                    detail += params[i];
+                }
+            }
+            return detail;
+        };
 
         if (method == auth_method::auto_detect)
         {
             if (!secret.empty() && has_xoauth2)
-                return auth_method::xoauth2;
+                return mailxx::ok(auth_method::xoauth2);
             if (has_plain)
-                return auth_method::plain;
+                return mailxx::ok(auth_method::plain);
             if (has_login)
-                return auth_method::login;
-            throw error("No supported AUTH mechanisms advertised.", "");
+                return mailxx::ok(auth_method::login);
+            return mailxx::fail<auth_method>(errc::smtp_auth_failed,
+                "No supported AUTH mechanisms advertised.", auth_detail());
         }
 
         if (method == auth_method::plain && !has_plain)
-            throw error("AUTH PLAIN not advertised by the server.", "");
+            return mailxx::fail<auth_method>(errc::smtp_auth_failed,
+                "AUTH PLAIN not advertised by the server.", auth_detail());
         if (method == auth_method::login && !has_login)
-            throw error("AUTH LOGIN not advertised by the server.", "");
+            return mailxx::fail<auth_method>(errc::smtp_auth_failed,
+                "AUTH LOGIN not advertised by the server.", auth_detail());
         if (method == auth_method::xoauth2 && !has_xoauth2)
-            throw error("AUTH XOAUTH2 not advertised by the server.", "");
-        return method;
+            return mailxx::fail<auth_method>(errc::smtp_auth_failed,
+                "AUTH XOAUTH2 not advertised by the server.", auth_detail());
+        return mailxx::ok(method);
     }
 
-    void enforce_auth_tls_policy()
+    mailxx::result<void> enforce_auth_tls_policy()
     {
-        mailxx::detail::ensure_auth_allowed<error>(dialog().stream().is_tls(), options_);
+        if (dialog().stream().is_tls() || !options_.require_tls_for_auth)
+            return mailxx::ok();
+        if (options_.allow_cleartext_auth)
+        {
+            MAILXX_WARN("AUTH without TLS allowed by configuration.");
+            return mailxx::ok();
+        }
+        mailxx::detail::error_detail detail;
+        detail.add("policy", "require_tls_for_auth");
+        append_peer_detail(detail);
+        return mailxx::fail<void>(errc::smtp_invalid_state,
+            "TLS required for authentication; call start_tls() or use tls_mode::implicit",
+            detail.str());
     }
 
     executor_type executor_;

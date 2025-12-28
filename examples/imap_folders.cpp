@@ -20,13 +20,12 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <boost/asio/detached.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include "example_util.hpp"
 #include <mailxx/imap/client.hpp>
 #include <mailxx/net/tls_mode.hpp>
 
 
 using mailxx::imap::client;
-using mailxx::imap::error;
-using mailxx::net::dialog_error;
 using std::cout;
 using std::endl;
 
@@ -39,36 +38,53 @@ int main()
     boost::asio::co_spawn(io_ctx,
         [&]() -> boost::asio::awaitable<void>
         {
-            try
+            mailxx::imap::options options;
+            options.tls.use_default_verify_paths = true;
+            options.tls.verify = mailxx::net::verify_mode::peer;
+            options.tls.verify_host = true;
+
+            client conn(io_ctx.get_executor(), options);
+            auto connect_res = co_await conn.connect("imap.mailserver.com", "993",
+                mailxx::net::tls_mode::implicit, &ssl_ctx, "imap.mailserver.com");
+            if (!connect_res)
             {
-                mailxx::imap::options options;
-                options.tls.use_default_verify_paths = true;
-                options.tls.verify = mailxx::net::verify_mode::peer;
-                options.tls.verify_host = true;
-
-                client conn(io_ctx.get_executor(), options);
-                co_await conn.connect("imap.mailserver.com", "993",
-                    mailxx::net::tls_mode::implicit, &ssl_ctx, "imap.mailserver.com");
-                co_await conn.read_greeting();
-                // modify username/password to use real credentials
-                co_await conn.login("mailxx@mailserver.com", "mailxxpass");
-
-                auto [list_resp, folders] = co_await conn.list("", "*");
-                (void)list_resp;
-                for (const auto& folder : folders)
-                {
-                    cout << folder.name << endl;
-                }
-
-                co_await conn.logout();
+                print_error(connect_res.error());
+                co_return;
             }
-            catch (const error& exc)
+
+            auto greeting_res = co_await conn.read_greeting();
+            if (!greeting_res)
             {
-                cout << exc.what() << endl;
+                print_error(greeting_res.error());
+                co_return;
             }
-            catch (const dialog_error& exc)
+
+            // modify username/password to use real credentials
+            auto login_res = co_await conn.login("mailxx@mailserver.com", "mailxxpass");
+            if (!login_res)
             {
-                cout << exc.what() << endl;
+                print_error(login_res.error());
+                co_return;
+            }
+
+            auto list_res = co_await conn.list("", "*");
+            if (!list_res)
+            {
+                print_error(list_res.error());
+                co_return;
+            }
+            const auto& [list_resp, folders] = list_res.value();
+            (void)list_resp;
+            for (const auto& folder : folders)
+            {
+                cout << folder.name << endl;
+            }
+
+            auto logout_res = co_await conn.logout();
+            if (!logout_res)
+            {
+                print_error(logout_res.error());
+                co_return;
             }
             co_return;
         },

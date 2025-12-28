@@ -30,5 +30,10 @@ export import mailxx.codec;
 export import mailxx.net;
 export import mailxx.mime;
 export import mailxx.smtp;
+export import mailxx.pool;
 export import mailxx.pop3;
 export import mailxx.imap;
+export {
+    #include <mailxx/storage/maildir.hpp>
+    #include <mailxx/storage/mbox.hpp>
+}

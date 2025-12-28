@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <mailxx/detail/append.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/detail/sanitize.hpp>
 #include <mailxx/net/tls_options.hpp>
 
@@ -340,15 +341,15 @@ namespace detail
             mailxx::detail::append_sv(cmd, " BODY=8BITMIME");
     }
 
-    [[nodiscard]] inline std::string build_mail_from_command(std::string_view mail_from, std::size_t msg_size,
+    [[nodiscard]] inline result<std::string> build_mail_from_command(std::string_view mail_from, std::size_t msg_size,
         bool has_8bit, bool needs_utf8, const mail_extension_flags& flags)
     {
-        mailxx::detail::ensure_no_crlf_or_nul(mail_from, "mail_from");
+        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(mail_from, "mail_from"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "MAIL FROM: ");
         mailxx::detail::append_angle_addr(cmd, mail_from);
         append_mail_extensions(cmd, msg_size, has_8bit, needs_utf8, flags);
-        return cmd;
+        return mailxx::ok(std::move(cmd));
     }
 } // namespace detail
 

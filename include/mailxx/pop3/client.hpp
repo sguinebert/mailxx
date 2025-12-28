@@ -35,15 +35,19 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/net/upgradable_stream.hpp>
 #include <mailxx/net/dialog.hpp>
 #include <mailxx/net/tls_mode.hpp>
+#include <mailxx/net/tls_error.hpp>
 #include <mailxx/mime/message.hpp>
 #include <mailxx/detail/append.hpp>
-#include <mailxx/detail/auth_policy.hpp>
+#include <mailxx/detail/asio_error.hpp>
 #include <mailxx/detail/async_mutex.hpp>
 #include <mailxx/detail/log.hpp>
+#include <mailxx/detail/oauth2_retry.hpp>
 #include <mailxx/detail/sasl.hpp>
 #include <mailxx/detail/sanitize.hpp>
 #include <mailxx/detail/reconnection.hpp>
+#include <mailxx/oauth2/token_source.hpp>
 #include <mailxx/pop3/error.hpp>
+#include <mailxx/pop3/error_mapping.hpp>
 #include <mailxx/pop3/types.hpp>
 
 namespace mailxx::pop3
@@ -72,14 +76,18 @@ protected:
     inline static const std::string ERR_RESPONSE = "-ERR";
     inline static const std::string END_OF_DATA = ".";
 
-    static std::tuple<std::string, std::string> parse_status(const std::string& line)
+    [[nodiscard]] static result<std::tuple<std::string, std::string>> parse_status(
+        const std::string& line, std::string_view command)
     {
         std::string::size_type pos = line.find(TOKEN_SEPARATOR_CHAR);
         std::string status = line.substr(0, pos);
         std::string rest = (pos != std::string::npos) ? line.substr(pos + 1) : "";
         if (status != OK_RESPONSE && status != ERR_RESPONSE)
-            throw error("Unknown response status.", line);
-        return std::make_tuple(status, rest);
+            return fail<std::tuple<std::string, std::string>>(
+                map_pop3_error(error_kind::response, status),
+                "Unknown response status.",
+                make_pop3_detail(command, line));
+        return ok(std::make_tuple(status, rest));
     }
     
     static bool is_ok(const std::string& status) { return status == OK_RESPONSE; }
@@ -198,64 +206,64 @@ public:
     }
 #endif
 
-    awaitable<void> connect(const std::string& host, uint16_t port)
+    awaitable<result_void> connect(const std::string& host, uint16_t port)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await connect_impl(host, std::to_string(port), mailxx::net::tls_mode::none, nullptr, {});
+        co_return co_await connect_impl(host, std::to_string(port), mailxx::net::tls_mode::none, nullptr, {});
     }
 
-    awaitable<void> connect(const std::string& host, uint16_t port, mailxx::net::tls_mode mode,
+    awaitable<result_void> connect(const std::string& host, uint16_t port, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await connect_impl(host, std::to_string(port), mode, tls_ctx, std::move(sni));
+        co_return co_await connect_impl(host, std::to_string(port), mode, tls_ctx, std::move(sni));
     }
 
-    awaitable<void> connect(const std::string& host, const std::string& service, mailxx::net::tls_mode mode,
+    awaitable<result_void> connect(const std::string& host, const std::string& service, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
+        co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
     }
 
-    awaitable<void> connect(std::string host, std::string service, mailxx::net::tls_mode mode,
+    awaitable<result_void> connect(std::string host, std::string service, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
+        co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
     }
 
-    awaitable<std::string> read_greeting()
+    awaitable<result<std::string>> read_greeting()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await read_greeting_impl();
     }
 
-    awaitable<capabilities_t> capa()
+    awaitable<result<capabilities_t>> capa()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await capa_impl();
     }
 
-    awaitable<void> start_tls(ssl::context& context, std::string sni = {})
+    awaitable<result_void> start_tls(ssl::context& context, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await start_tls_impl(context, std::move(sni));
+        co_return co_await start_tls_impl(context, std::move(sni));
     }
 
-    awaitable<void> login(const std::string& username, const std::string& password)
+    awaitable<result_void> login(const std::string& username, const std::string& password)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await login_impl(username, password);
+        co_return co_await login_impl(username, password);
     }
 
     /**
      * Authenticate using SASL PLAIN mechanism.
      */
-    awaitable<void> auth_plain(const std::string& username, const std::string& password)
+    awaitable<result_void> auth_plain(const std::string& username, const std::string& password)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await auth_plain_impl(username, password);
+        co_return co_await auth_plain_impl(username, password);
     }
 
     /**
@@ -265,65 +273,79 @@ public:
      * @param username The email address
      * @param access_token The OAuth2 access token (not refresh token)
      */
-    awaitable<void> auth_xoauth2(const std::string& username, const std::string& access_token)
+    awaitable<result_void> auth_xoauth2(const std::string& username, const std::string& access_token)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await auth_xoauth2_impl(username, access_token);
+        co_return co_await auth_xoauth2_impl(username, access_token);
     }
 
     /**
      * Authenticate using APOP challenge-response.
      */
-    awaitable<void> apop(const std::string& username, const std::string& password)
+    awaitable<result_void> apop(const std::string& username, const std::string& password)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await apop_impl(username, password);
+        co_return co_await apop_impl(username, password);
     }
 
     /**
      * Authenticate using the specified method.
      */
-    awaitable<void> authenticate(const std::string& username, const std::string& credential, auth_method_t method)
+    awaitable<result_void> authenticate(const std::string& username, const std::string& credential, auth_method_t method)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await authenticate_impl(username, credential, method);
+        co_return co_await authenticate_impl(username, credential, method);
     }
 
     /**
      * Authenticate using OAuth2 access token.
      * Convenience method for OAuth2 authentication.
      */
-    awaitable<void> authenticate_oauth2(const std::string& username, const std::string& access_token)
+    awaitable<result_void> authenticate_oauth2(const std::string& username, const std::string& access_token)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await auth_xoauth2_impl(username, access_token);
+        co_return co_await auth_xoauth2_impl(username, access_token);
     }
 
-    awaitable<mailbox_stat_t> stat()
+    awaitable<result_void> authenticate_oauth2(const std::string& username, mailxx::oauth2::token_source& source)
+    {
+        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        auto auth = [&](const std::string& token) -> awaitable<result_void>
+        {
+            co_return co_await auth_xoauth2_impl(username, token);
+        };
+        auto should_retry = [](const error_info& err)
+        {
+            return err.code == errc::pop3_auth_failed;
+        };
+        co_return co_await mailxx::detail::oauth2_auth_with_retry(source, auth, should_retry);
+    }
+
+    awaitable<result<mailbox_stat_t>> stat()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await stat_impl();
     }
 
-    awaitable<message_list_t> list()
+    awaitable<result<message_list_t>> list()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await list_impl();
     }
 
-    awaitable<message_list_t> list(unsigned message_no)
+    awaitable<result<message_list_t>> list(unsigned message_no)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await list_impl(message_no);
     }
 
-    awaitable<uidl_list_t> uidl(unsigned message_no = 0)
+    awaitable<result<uidl_list_t>> uidl(unsigned message_no = 0)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await uidl_impl(message_no);
     }
 
-    awaitable<std::string> retr(unsigned long message_no)
+    awaitable<result<std::string>> retr(unsigned long message_no)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await retr_impl(message_no);
@@ -335,7 +357,7 @@ public:
      * @param expected_size Expected size from LIST (for progress calculation)
      * @param progress Callback invoked during download
      */
-    awaitable<std::string> retr_with_progress(
+    awaitable<result<std::string>> retr_with_progress(
         unsigned long message_no,
         unsigned long expected_size,
         progress_callback_t progress)
@@ -344,40 +366,40 @@ public:
         co_return co_await retr_with_progress_impl(message_no, expected_size, std::move(progress));
     }
 
-    awaitable<std::string> top(unsigned message_no, unsigned lines)
+    awaitable<result<std::string>> top(unsigned message_no, unsigned lines)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await top_impl(message_no, lines);
     }
 
-    awaitable<mailxx::message> retr_message(unsigned message_no)
+    awaitable<result<mailxx::message>> retr_message(unsigned message_no)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
         co_return co_await retr_message_impl(message_no);
     }
 
-    awaitable<void> dele(unsigned long message_no)
+    awaitable<result_void> dele(unsigned long message_no)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await dele_impl(message_no);
+        co_return co_await dele_impl(message_no);
     }
 
-    awaitable<void> rset()
+    awaitable<result_void> rset()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await rset_impl();
+        co_return co_await rset_impl();
     }
 
-    awaitable<void> noop()
+    awaitable<result_void> noop()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await noop_impl();
+        co_return co_await noop_impl();
     }
 
-    awaitable<void> quit()
+    awaitable<result_void> quit()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_await quit_impl();
+        co_return co_await quit_impl();
     }
 
     dialog_type& dialog() { return dlg_; }
@@ -422,7 +444,7 @@ public:
      * @param credentials Kept for compatibility; reconnection uses stored session data.
      * @return Message content
      */
-    awaitable<std::string> retr_with_reconnection(
+    awaitable<result<std::string>> retr_with_reconnection(
         unsigned long message_no,
         const std::pair<std::string, std::string>& /*credentials*/)
     {
@@ -430,92 +452,113 @@ public:
             co_return co_await retr(message_no);
         
         unsigned int attempt = 0;
-        std::exception_ptr last_error;
+        result<std::string> last_error = fail<std::string>(
+            errc::net_connect_failed, "disconnected");
         
         while (true)
         {
-            try
-            {
-                co_return co_await retr(message_no);
-            }
-            catch (const std::exception& e)
-            {
-                last_error = std::current_exception();
-                
-                if (!is_connection_error(e))
-                    std::rethrow_exception(last_error);
+            auto res = co_await retr(message_no);
+            if (res)
+                co_return res;
 
-                const session_snapshot snapshot = session_snapshot_;
-                ensure_reconnect_ready(snapshot);
-                
-                ++attempt;
-                
-                if (reconnection_policy_.max_attempts > 0 && 
-                    attempt > reconnection_policy_.max_attempts)
+            last_error = std::move(res);
+            const error_info err = last_error.error();
+
+            if (!is_connection_error(err))
+                co_return last_error;
+
+            const session_snapshot snapshot = session_snapshot_;
+            auto ready = ensure_reconnect_ready(snapshot);
+            if (!ready)
+                co_return fail<std::string>(ready.error());
+            
+            ++attempt;
+            
+            if (reconnection_policy_.max_attempts > 0 && 
+                attempt > reconnection_policy_.max_attempts)
+            {
+                if (reconnection_policy_.on_reconnect_failed)
                 {
-                    if (reconnection_policy_.on_reconnect_failed)
-                        reconnection_policy_.on_reconnect_failed(e);
-                    std::rethrow_exception(last_error);
+                    std::string msg = err.message.empty() ? std::string(mailxx::to_string(err.code)) : err.message;
+                    if (!err.detail.empty())
+                    {
+                        if (!msg.empty())
+                            msg += " - ";
+                        msg += err.detail;
+                    }
+                    std::runtime_error ex(msg);
+                    reconnection_policy_.on_reconnect_failed(ex);
                 }
-                
-                auto delay = reconnection_policy_.calculate_delay(attempt);
-                
-                if (reconnection_policy_.on_reconnect_attempt)
-                {
-                    if (!reconnection_policy_.on_reconnect_attempt(attempt, delay))
-                        std::rethrow_exception(last_error);
-                }
-                
-                // Wait before reconnecting
-                steady_timer timer(dlg_.stream().get_executor());
-                timer.expires_after(delay);
-                co_await timer.async_wait(use_awaitable);
-                
-                // Try to reconnect
-                try
-                {
-                    co_await reconnect_with_snapshot(snapshot);
-                    
-                    if (reconnection_policy_.on_reconnect_success)
-                        reconnection_policy_.on_reconnect_success();
-                }
-                catch (const std::exception& reconnect_error)
-                {
-                    if (!is_connection_error(reconnect_error))
-                        throw;
-                    continue;
-                }
+                co_return last_error;
             }
+            
+            auto delay = reconnection_policy_.calculate_delay(attempt);
+            
+            if (reconnection_policy_.on_reconnect_attempt)
+            {
+                if (!reconnection_policy_.on_reconnect_attempt(attempt, delay))
+                    co_return last_error;
+            }
+            
+            // Wait before reconnecting
+            steady_timer timer(dlg_.stream().get_executor());
+            timer.expires_after(delay);
+            MAILXX_TRY_CO_AWAIT(mailxx::to_result(timer.async_wait(use_nothrow_awaitable)));
+            
+            // Try to reconnect
+            auto reconnect_res = co_await reconnect_with_snapshot(snapshot);
+            if (!reconnect_res)
+            {
+                last_error = fail<std::string>(reconnect_res.error());
+                if (!is_connection_error(reconnect_res.error()))
+                    co_return last_error;
+                continue;
+            }
+            
+            if (reconnection_policy_.on_reconnect_success)
+                reconnection_policy_.on_reconnect_success();
         }
     }
 
 private:
     /// Check if an exception indicates a connection error
-    [[nodiscard]] static bool is_connection_error(const std::exception& e)
+    [[nodiscard]] static bool is_connection_error(const error_info& err) noexcept
     {
-        const std::string msg = e.what();
-        static const char* keywords[] = {
-            "connection", "disconnected", "broken pipe", "reset by peer",
-            "timed out", "timeout", "eof", "end of file", "closed", "network"
-        };
-        for (const char* keyword : keywords)
+        switch (err.code)
         {
-            if (msg.find(keyword) != std::string::npos)
+            case errc::net_resolve_failed:
+            case errc::net_connect_failed:
+            case errc::net_connection_refused:
+            case errc::net_connection_reset:
+            case errc::net_io_failed:
+            case errc::net_timeout:
+            case errc::net_eof:
+            case errc::net_cancelled:
                 return true;
+            default:
+                return false;
         }
-        return false;
     }
 
-    static void ensure_reconnect_ready(const session_snapshot& snapshot)
+    [[nodiscard]] static result_void ensure_reconnect_ready(const session_snapshot& snapshot)
     {
         if (!snapshot.has_connection())
-            throw error("Reconnection failure: no session stored.", "");
+            return fail_void(map_pop3_error(error_kind::invalid_state),
+                "Reconnection failure: no session stored.",
+                make_pop3_detail("RECONNECT", "no session stored"));
         if (!snapshot.has_auth())
-            throw error("Reconnection failure: no auth stored.", "");
+            return fail_void(map_pop3_error(error_kind::invalid_state),
+                "Reconnection failure: no auth stored.",
+                make_pop3_detail("RECONNECT", "no auth stored"));
         if (!snapshot.secret.has_value())
-            throw error("Reconnection failure: no creds stored.", "");
+            return fail_void(map_pop3_error(error_kind::invalid_state),
+                "Reconnection failure: no creds stored.",
+                make_pop3_detail("RECONNECT", "no creds stored"));
         if (snapshot.tls_mode != mailxx::net::tls_mode::none && snapshot.tls_ctx == nullptr)
-            throw error("Reconnection failure: no TLS context stored.", "");
+            return fail_void(map_pop3_error(error_kind::invalid_state),
+                "Reconnection failure: no TLS context stored.",
+                make_pop3_detail("RECONNECT", "no tls context stored"));
+        return ok();
     }
 
     void remember_connection(std::string_view host, std::string_view service)
@@ -541,15 +584,19 @@ private:
             session_snapshot_.secret.reset();
     }
 
-    static std::string extract_apop_challenge(std::string_view greeting_line)
+    static result<std::string> extract_apop_challenge(std::string_view greeting_line)
     {
         const auto start = greeting_line.find('<');
         if (start == std::string_view::npos)
-            throw error("APOP challenge missing.", std::string(greeting_line));
+            return fail<std::string>(map_pop3_error(error_kind::invalid_state),
+                "APOP challenge missing.",
+                make_pop3_detail("APOP", greeting_line));
         const auto end = greeting_line.find('>', start + 1);
         if (end == std::string_view::npos || end <= start)
-            throw error("APOP challenge missing.", std::string(greeting_line));
-        return std::string(greeting_line.substr(start, end - start + 1));
+            return fail<std::string>(map_pop3_error(error_kind::invalid_state),
+                "APOP challenge missing.",
+                make_pop3_detail("APOP", greeting_line));
+        return ok(std::string(greeting_line.substr(start, end - start + 1)));
     }
 
     static std::string md5_hex(std::string_view input)
@@ -568,74 +615,84 @@ private:
         return out;
     }
 
-    awaitable<void> reconnect_with_snapshot(const session_snapshot& snapshot)
+    awaitable<result_void> reconnect_with_snapshot(const session_snapshot& snapshot)
     {
         state_ = state_t::DISCONNECTED;
 
-        co_await connect_impl(snapshot.host, snapshot.service, snapshot.tls_mode, snapshot.tls_ctx, snapshot.sni);
+        MAILXX_TRY_CO_AWAIT(connect_impl(snapshot.host, snapshot.service, snapshot.tls_mode, snapshot.tls_ctx, snapshot.sni));
 
         if (state_ == state_t::CONNECTED)
-            co_await read_greeting_impl();
+            MAILXX_TRY_CO_AWAIT(read_greeting_impl());
 
         if (snapshot.tls_mode == mailxx::net::tls_mode::starttls && !options_.auto_starttls)
         {
             if (snapshot.tls_ctx == nullptr)
-                throw error("TLS context is required.", "STLS needs a context.");
-            (void)co_await capa_impl();
-            co_await start_tls_impl(*snapshot.tls_ctx, snapshot.sni);
+                co_return fail_void(map_pop3_error(error_kind::invalid_state),
+                    "TLS context is required.",
+                    make_pop3_detail("STLS", "STLS needs a context."));
+            MAILXX_TRY_CO_AWAIT(capa_impl());
+            MAILXX_TRY_CO_AWAIT(start_tls_impl(*snapshot.tls_ctx, snapshot.sni));
         }
 
-        co_await reauthenticate(snapshot);
+        co_return co_await reauthenticate(snapshot);
     }
 
-    awaitable<void> reauthenticate(const session_snapshot& snapshot)
+    awaitable<result_void> reauthenticate(const session_snapshot& snapshot)
     {
         const std::string& secret = snapshot.secret.value();
         switch (snapshot.auth)
         {
             case session_snapshot::auth_mechanism::user_pass:
-                co_await login_impl(snapshot.username, secret);
+                MAILXX_TRY_CO_AWAIT(login_impl(snapshot.username, secret));
                 break;
             case session_snapshot::auth_mechanism::sasl_plain:
-                co_await auth_plain_impl(snapshot.username, secret);
+                MAILXX_TRY_CO_AWAIT(auth_plain_impl(snapshot.username, secret));
                 break;
             case session_snapshot::auth_mechanism::xoauth2:
-                co_await auth_xoauth2_impl(snapshot.username, secret);
+                MAILXX_TRY_CO_AWAIT(auth_xoauth2_impl(snapshot.username, secret));
                 break;
             case session_snapshot::auth_mechanism::apop:
-                co_await apop_impl(snapshot.username, secret);
+                MAILXX_TRY_CO_AWAIT(apop_impl(snapshot.username, secret));
                 break;
             case session_snapshot::auth_mechanism::none:
-                throw error("Reconnection failure: no auth stored.", "");
+                co_return fail_void(map_pop3_error(error_kind::invalid_state),
+                    "Reconnection failure: no auth stored.",
+                    make_pop3_detail("RECONNECT", "no auth stored"));
         }
+        co_return ok();
     }
 
-    std::string resolve_sni(std::string_view host, std::string sni) const
+    result<std::string> resolve_sni(std::string_view host, std::string sni) const
     {
         if (sni.empty())
             sni.assign(host.begin(), host.end());
-        mailxx::detail::ensure_no_crlf_or_nul(sni, "sni");
-        return sni;
+        auto res = validate_no_crlf_or_nul(sni, "sni");
+        if (!res)
+            return mailxx::fail<std::string>(res.error());
+        return ok(std::move(sni));
     }
 
-    awaitable<void> upgrade_to_tls(ssl::context& context, std::string sni)
+    awaitable<result_void> upgrade_to_tls(ssl::context& context, std::string sni)
     {
         dialog_type& dlg = dlg_;
         const std::size_t max_len = dlg.max_line_length();
         const auto timeout = dlg.timeout();
 
         mailxx::net::upgradable_stream stream = std::move(dlg.stream());
-        co_await stream.start_tls(context, std::move(sni), options_.tls);
+        auto tls_res = co_await stream.start_tls(context, std::move(sni), options_.tls);
+        if (!tls_res)
+            co_return mailxx::fail<void>(std::move(tls_res).error());
         dlg_ = dialog_type(std::move(stream), max_len, timeout);
         configure_trace();
+        co_return ok();
     }
 
-    awaitable<void> connect_impl(const std::string& host, const std::string& service,
+    awaitable<result_void> connect_impl(const std::string& host, const std::string& service,
         mailxx::net::tls_mode mode = mailxx::net::tls_mode::none,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
-        ensure_state(state_t::DISCONNECTED, "CONNECT");
-        mailxx::detail::ensure_no_crlf_or_nul(host, "host");
+        MAILXX_TRY(ensure_state(state_t::DISCONNECTED, "CONNECT"));
+        MAILXX_TRY(validate_no_crlf_or_nul(host, "host"));
         host_ = host;
         remember_connection(host, service);
         remember_tls(mode, tls_ctx, sni);
@@ -657,18 +714,26 @@ private:
         capabilities_.reset();
         const auto executor = dlg_.stream().get_executor();
         tcp::resolver resolver(executor);
-        auto endpoints = co_await resolver.async_resolve(host, service, use_awaitable);
+        MAILXX_TRY_ASSIGN(auto endpoints, mailxx::to_result(
+            co_await resolver.async_resolve(host, service, use_nothrow_awaitable),
+            mailxx::net::io_stage::resolve));
 
         mailxx::net::upgradable_stream stream(executor);
-        co_await async_connect(stream.lowest_layer(), endpoints, use_awaitable);
+        MAILXX_TRY(mailxx::to_result(
+            co_await async_connect(stream.lowest_layer(), endpoints, use_nothrow_awaitable),
+            mailxx::net::io_stage::connect));
         
         if (mode == mailxx::net::tls_mode::implicit)
         {
             if (tls_ctx == nullptr)
-                throw error("TLS context is required.", "Implicit TLS needs a context.");
-            std::string resolved_sni = resolve_sni(host, std::move(sni));
+                co_return fail_void(map_pop3_error(error_kind::invalid_state),
+                    "TLS context is required.",
+                    make_pop3_detail("CONNECT", "Implicit TLS needs a context."));
+            std::string resolved_sni = MAILXX_CO_TRY(resolve_sni(host, std::move(sni)));
             remember_tls(mailxx::net::tls_mode::implicit, tls_ctx, resolved_sni);
-            co_await stream.start_tls(*tls_ctx, std::move(resolved_sni), options_.tls);
+            auto tls_res = co_await stream.start_tls(*tls_ctx, std::move(resolved_sni), options_.tls);
+            if (!tls_res)
+                co_return mailxx::fail<void>(std::move(tls_res).error());
         }
 
         dlg_ = dialog_type(std::move(stream), options_.max_line_length, options_.timeout);
@@ -678,36 +743,41 @@ private:
         if (mode == mailxx::net::tls_mode::starttls && options_.auto_starttls)
         {
             if (tls_ctx == nullptr)
-                throw error("TLS context is required.", "STLS needs a context.");
-            co_await read_greeting_impl();
-            (void)co_await capa_impl();
-            co_await start_tls_impl(*tls_ctx, std::move(sni));
-            (void)co_await capa_impl();
+                co_return fail_void(map_pop3_error(error_kind::invalid_state),
+                    "TLS context is required.",
+                    make_pop3_detail("STLS", "STLS needs a context."));
+            MAILXX_TRY_CO_AWAIT(read_greeting_impl());
+            MAILXX_TRY_CO_AWAIT(capa_impl());
+            MAILXX_TRY_CO_AWAIT(start_tls_impl(*tls_ctx, std::move(sni)));
+            MAILXX_TRY_CO_AWAIT(capa_impl());
         }
+        co_return ok();
     }
 
-    awaitable<std::string> read_greeting_impl()
+    awaitable<result<std::string>> read_greeting_impl()
     {
-        ensure_state(state_t::CONNECTED, "READ_GREETING");
-        std::string line = co_await dlg_.read_line(use_awaitable);
+        MAILXX_TRY(ensure_state(state_t::CONNECTED, "READ_GREETING"));
+        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
         last_greeting_line_ = line;
-        auto [status, msg] = parse_status(line);
+        auto [status, msg] = MAILXX_CO_TRY(parse_status(line, "GREETING"));
         if (!is_ok(status))
-            throw error("Connection to server failure.", msg);
+            co_return fail<std::string>(map_pop3_error(error_kind::response, status),
+                "Connection to server failure.",
+                make_pop3_detail("GREETING", line));
         state_ = state_t::GREETING;
-        co_return msg;
+        co_return ok(msg);
     }
 
-    awaitable<capabilities_t> capa_impl()
+    awaitable<result<capabilities_t>> capa_impl()
     {
-        ensure_state_at_least(state_t::GREETING, "CAPA");
-        co_await send_command("CAPA");
-        (void)co_await read_ok_response("Capabilities failure.");
+        MAILXX_TRY(ensure_state_at_least(state_t::GREETING, "CAPA"));
+        MAILXX_TRY_CO_AWAIT(send_command("CAPA"));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Capabilities failure.", "CAPA"));
 
         capabilities_t caps;
         while (true)
         {
-            std::string line = co_await dlg_.read_line(use_awaitable);
+            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -716,106 +786,126 @@ private:
             parse_capability_line(caps, line);
         }
         capabilities_ = caps;
-        co_return caps;
+        co_return ok(caps);
     }
 
-    awaitable<void> start_tls_impl(ssl::context& context, std::string sni)
+    awaitable<result_void> start_tls_impl(ssl::context& context, std::string sni)
     {
-        ensure_state(state_t::GREETING, "STLS");
+        MAILXX_TRY(ensure_state(state_t::GREETING, "STLS"));
         // Require CAPA to be called first to avoid optimistic STLS.
         if (!capabilities_.has_value())
-            throw error("STLS capability unknown; call CAPA first.", "");
+            co_return fail_void(map_pop3_error(error_kind::invalid_state),
+                "STLS capability unknown; call CAPA first.",
+                make_pop3_detail("STLS"));
         if (!capabilities_->stls)
-            throw error("STLS not supported.", "");
+            co_return fail_void(map_pop3_error(error_kind::invalid_state),
+                "STLS not supported.",
+                make_pop3_detail("STLS"));
 
-        co_await send_command("STLS");
-        std::string line = co_await dlg_.read_line(use_awaitable);
-        auto [status, msg] = parse_status(line);
+        MAILXX_TRY_CO_AWAIT(send_command("STLS"));
+        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+        auto [status, msg] = MAILXX_CO_TRY(parse_status(line, "STLS"));
         if (!is_ok(status))
-            throw error("STARTTLS failure.", msg);
+            co_return fail_void(map_pop3_error(error_kind::response, status),
+                "STARTTLS failure.",
+                make_pop3_detail("STLS", line));
 
-        std::string resolved_sni = resolve_sni(host_, std::move(sni));
+        std::string resolved_sni = MAILXX_CO_TRY(resolve_sni(host_, std::move(sni)));
         remember_tls(mailxx::net::tls_mode::starttls, &context, resolved_sni);
-        co_await upgrade_to_tls(context, std::move(resolved_sni));
+        MAILXX_TRY_CO_AWAIT(upgrade_to_tls(context, std::move(resolved_sni)));
+        co_return ok();
     }
 
-    awaitable<void> login_impl(const std::string& username, const std::string& password)
+    awaitable<result_void> login_impl(const std::string& username, const std::string& password)
     {
-        ensure_state(state_t::GREETING, "LOGIN");
-        enforce_auth_tls_policy();
-        mailxx::detail::ensure_no_crlf_or_nul(username, "username");
-        mailxx::detail::ensure_no_crlf_or_nul(password, "password");
-        co_await send_command("USER " + username);
-        (void)co_await read_ok_response("Username rejection.");
+        MAILXX_TRY(ensure_state(state_t::GREETING, "LOGIN"));
+        MAILXX_TRY(enforce_auth_tls_policy());
+        MAILXX_TRY(validate_no_crlf_or_nul(username, "username"));
+        MAILXX_TRY(validate_no_crlf_or_nul(password, "password"));
+        MAILXX_TRY_CO_AWAIT(send_command("USER " + username));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Username rejection.", "USER", error_kind::auth));
 
-        co_await send_command("PASS " + password);
-        (void)co_await read_ok_response("Password rejection.");
+        MAILXX_TRY_CO_AWAIT(send_command("PASS " + password));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Password rejection.", "PASS", error_kind::auth));
         state_ = state_t::TRANSACTION;
         remember_auth(session_snapshot::auth_mechanism::user_pass, username, password);
+        co_return ok();
     }
 
-    awaitable<void> auth_plain_impl(const std::string& username, const std::string& password)
+    awaitable<result_void> auth_plain_impl(const std::string& username, const std::string& password)
     {
-        ensure_state(state_t::GREETING, "AUTH PLAIN");
-        enforce_auth_tls_policy();
-        mailxx::detail::ensure_no_crlf_or_nul(username, "username");
-        mailxx::detail::ensure_no_crlf_or_nul(password, "password");
-        const std::string encoded = sasl::encode_plain(username, password);
+        MAILXX_TRY(ensure_state(state_t::GREETING, "AUTH PLAIN"));
+        MAILXX_TRY(enforce_auth_tls_policy());
+        MAILXX_TRY(validate_no_crlf_or_nul(username, "username"));
+        MAILXX_TRY(validate_no_crlf_or_nul(password, "password"));
+        std::string encoded;
+        MAILXX_TRY_ASSIGN(encoded, sasl::encode_plain(username, password));
         
-        co_await send_command("AUTH PLAIN");
-        std::string line = co_await dlg_.read_line(use_awaitable);
+        MAILXX_TRY_CO_AWAIT(send_command("AUTH PLAIN"));
+        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
         
         if (!line.empty() && line[0] == '+')
         {
-            co_await send_command(encoded);
-            (void)co_await read_ok_response("PLAIN authentication failure.");
+            MAILXX_TRY_CO_AWAIT(send_command(encoded));
+            MAILXX_TRY_CO_AWAIT(read_ok_response("PLAIN authentication failure.", "AUTH PLAIN", error_kind::auth));
         }
         else
         {
-            auto [status, msg] = parse_status(line);
+            auto [status, msg] = MAILXX_CO_TRY(parse_status(line, "AUTH PLAIN"));
             if (!is_ok(status))
-                throw error("PLAIN authentication failure.", msg);
+                co_return fail_void(map_pop3_error(error_kind::auth),
+                    "PLAIN authentication failure.",
+                    make_pop3_detail("AUTH PLAIN", line));
+            (void)msg;
         }
         state_ = state_t::TRANSACTION;
         remember_auth(session_snapshot::auth_mechanism::sasl_plain, username, password);
+        co_return ok();
     }
 
-    awaitable<void> auth_xoauth2_impl(const std::string& username, const std::string& access_token)
+    awaitable<result_void> auth_xoauth2_impl(const std::string& username, const std::string& access_token)
     {
-        ensure_state(state_t::GREETING, "AUTH XOAUTH2");
-        enforce_auth_tls_policy();
-        mailxx::detail::ensure_no_crlf_or_nul(username, "username");
-        mailxx::detail::ensure_no_crlf_or_nul(access_token, "access_token");
-        const std::string encoded = sasl::encode_xoauth2(username, access_token);
+        MAILXX_TRY(ensure_state(state_t::GREETING, "AUTH XOAUTH2"));
+        MAILXX_TRY(enforce_auth_tls_policy());
+        MAILXX_TRY(validate_no_crlf_or_nul(username, "username"));
+        MAILXX_TRY(validate_no_crlf_or_nul(access_token, "access_token"));
+        std::string encoded;
+        MAILXX_TRY_ASSIGN(encoded, sasl::encode_xoauth2(username, access_token));
         
-        co_await send_command("AUTH XOAUTH2 " + encoded);
-        std::string line = co_await dlg_.read_line(use_awaitable);
+        MAILXX_TRY_CO_AWAIT(send_command("AUTH XOAUTH2 " + encoded));
+        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
         
         if (!line.empty() && line[0] == '+')
         {
-            co_await send_command("");
-            (void)co_await read_ok_response("XOAUTH2 authentication failure.");
+            MAILXX_TRY_CO_AWAIT(send_command(""));
+            MAILXX_TRY_CO_AWAIT(read_ok_response("XOAUTH2 authentication failure.", "AUTH XOAUTH2", error_kind::auth));
         }
         else
         {
-            auto [status, msg] = parse_status(line);
+            auto [status, msg] = MAILXX_CO_TRY(parse_status(line, "AUTH XOAUTH2"));
             if (!is_ok(status))
-                throw error("XOAUTH2 authentication failure.", msg);
+                co_return fail_void(map_pop3_error(error_kind::auth),
+                    "XOAUTH2 authentication failure.",
+                    make_pop3_detail("AUTH XOAUTH2", line));
+            (void)msg;
         }
         state_ = state_t::TRANSACTION;
         remember_auth(session_snapshot::auth_mechanism::xoauth2, username, access_token);
+        co_return ok();
     }
 
-    awaitable<void> apop_impl(const std::string& username, const std::string& password)
+    awaitable<result_void> apop_impl(const std::string& username, const std::string& password)
     {
-        ensure_state(state_t::GREETING, "APOP");
-        mailxx::detail::ensure_no_crlf_or_nul(username, "username");
-        mailxx::detail::ensure_no_crlf_or_nul(password, "password");
+        MAILXX_TRY(ensure_state(state_t::GREETING, "APOP"));
+        MAILXX_TRY(validate_no_crlf_or_nul(username, "username"));
+        MAILXX_TRY(validate_no_crlf_or_nul(password, "password"));
 
         if (last_greeting_line_.empty())
-            throw error("APOP challenge missing.", "");
+            co_return fail_void(map_pop3_error(error_kind::invalid_state),
+                "APOP challenge missing.",
+                make_pop3_detail("APOP"));
 
-        const std::string challenge = extract_apop_challenge(last_greeting_line_);
+        const std::string challenge = MAILXX_CO_TRY(extract_apop_challenge(last_greeting_line_));
         const std::string digest = md5_hex(challenge + password);
 
         std::string cmd;
@@ -823,58 +913,71 @@ private:
         mailxx::detail::append_sv(cmd, username);
         mailxx::detail::append_space(cmd);
         mailxx::detail::append_sv(cmd, digest);
-        co_await send_command(cmd);
-        (void)co_await read_ok_response("APOP authentication failure.");
+        MAILXX_TRY_CO_AWAIT(send_command(cmd));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("APOP authentication failure.", "APOP", error_kind::auth));
         state_ = state_t::TRANSACTION;
         remember_auth(session_snapshot::auth_mechanism::apop, username, password);
+        co_return ok();
     }
 
-    awaitable<void> authenticate_impl(const std::string& username, const std::string& credential, auth_method_t method)
+    awaitable<result_void> authenticate_impl(const std::string& username, const std::string& credential, auth_method_t method)
     {
         switch (method)
         {
             case auth_method_t::LOGIN:
-                co_await login_impl(username, credential);
+                MAILXX_TRY_CO_AWAIT(login_impl(username, credential));
                 break;
             case auth_method_t::PLAIN:
-                co_await auth_plain_impl(username, credential);
+                MAILXX_TRY_CO_AWAIT(auth_plain_impl(username, credential));
                 break;
             case auth_method_t::XOAUTH2:
-                co_await auth_xoauth2_impl(username, credential);
+                MAILXX_TRY_CO_AWAIT(auth_xoauth2_impl(username, credential));
                 break;
             case auth_method_t::APOP:
-                co_await apop_impl(username, credential);
+                MAILXX_TRY_CO_AWAIT(apop_impl(username, credential));
                 break;
         }
+        co_return ok();
     }
 
-    void enforce_auth_tls_policy()
+    result_void enforce_auth_tls_policy()
     {
-        mailxx::detail::ensure_auth_allowed<error>(dlg_.stream().is_tls(), options_);
+        if (dlg_.stream().is_tls() || !options_.require_tls_for_auth)
+            return ok();
+        if (options_.allow_cleartext_auth)
+        {
+            MAILXX_WARN("AUTH without TLS allowed by configuration.");
+            return ok();
+        }
+        return fail_void(map_pop3_error(error_kind::invalid_state),
+            "TLS required for authentication; call start_tls() or use tls_mode::implicit",
+            make_pop3_detail("AUTH", "tls required"));
     }
 
-    awaitable<mailbox_stat_t> stat_impl()
+    awaitable<result<mailbox_stat_t>> stat_impl()
     {
-        ensure_state(state_t::TRANSACTION, "STAT");
-        co_await send_command("STAT");
-        std::string msg = co_await read_ok_response("Reading statistics failure.");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "STAT"));
+        MAILXX_TRY_CO_AWAIT(send_command("STAT"));
+        std::string msg = MAILXX_CO_TRY(co_await read_ok_response("Reading statistics failure.", "STAT"));
         mailbox_stat_t stat;
         std::istringstream iss(msg);
         if (!(iss >> stat.messages_no >> stat.mailbox_size))
-            throw error("Parser failure.", msg);
-        co_return stat;
+            co_return fail<mailbox_stat_t>(map_pop3_error(error_kind::response),
+                "Parser failure.",
+                make_pop3_detail("STAT", msg));
+        co_return ok(stat);
     }
 
-    awaitable<message_list_t> list_impl()
+    awaitable<result<message_list_t>> list_impl()
     {
-        ensure_state(state_t::TRANSACTION, "LIST");
-        co_await send_command("LIST");
-        (void)co_await read_ok_response("Listing all messages failure.");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "LIST"));
+        MAILXX_TRY_CO_AWAIT(send_command("LIST"));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Listing all messages failure.", "LIST"));
 
         message_list_t msg_list;
         while (true)
         {
-            std::string line = co_await dlg_.read_line(use_awaitable);
+            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -882,33 +985,39 @@ private:
             std::istringstream iss(line);
             unsigned num = 0;
             unsigned long size = 0;
-            if (iss >> num >> size)
-                msg_list[num] = size;
+            if (!(iss >> num >> size))
+                co_return fail<message_list_t>(map_pop3_error(error_kind::response),
+                    "LIST parse failure.",
+                    make_pop3_detail("LIST", line));
+            msg_list[num] = size;
         }
-        co_return msg_list;
+        co_return ok(msg_list);
     }
 
-    awaitable<message_list_t> list_impl(unsigned message_no)
+    awaitable<result<message_list_t>> list_impl(unsigned message_no)
     {
-        ensure_state(state_t::TRANSACTION, "LIST");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "LIST"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "LIST ");
         mailxx::detail::append_uint(cmd, message_no);
-        co_await send_command(cmd);
-        std::string msg = co_await read_ok_response("Listing message failure.");
+        MAILXX_TRY_CO_AWAIT(send_command(cmd));
+        std::string msg = MAILXX_CO_TRY(co_await read_ok_response("Listing message failure.", "LIST"));
 
         message_list_t msg_list;
         std::istringstream iss(msg);
         unsigned num = 0;
         unsigned long size = 0;
-        if (iss >> num >> size)
-            msg_list[num] = size;
-        co_return msg_list;
+        if (!(iss >> num >> size))
+            co_return fail<message_list_t>(map_pop3_error(error_kind::response),
+                "LIST parse failure.",
+                make_pop3_detail("LIST", msg));
+        msg_list[num] = size;
+        co_return ok(msg_list);
     }
 
-    awaitable<uidl_list_t> uidl_impl(unsigned message_no)
+    awaitable<result<uidl_list_t>> uidl_impl(unsigned message_no)
     {
-        ensure_state(state_t::TRANSACTION, "UIDL");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "UIDL"));
         std::string cmd;
         if (message_no == 0)
         {
@@ -919,8 +1028,8 @@ private:
             mailxx::detail::append_sv(cmd, "UIDL ");
             mailxx::detail::append_uint(cmd, message_no);
         }
-        co_await send_command(cmd);
-        std::string msg = co_await read_ok_response("Unique ID listing failure.");
+        MAILXX_TRY_CO_AWAIT(send_command(cmd));
+        std::string msg = MAILXX_CO_TRY(co_await read_ok_response("Unique ID listing failure.", "UIDL"));
 
         uidl_list_t uidl_list;
         if (message_no != 0)
@@ -928,14 +1037,17 @@ private:
             std::istringstream iss(msg);
             unsigned num = 0;
             std::string uidl;
-            if (iss >> num >> uidl)
-                uidl_list[num] = std::move(uidl);
-            co_return uidl_list;
+            if (!(iss >> num >> uidl))
+                co_return fail<uidl_list_t>(map_pop3_error(error_kind::response),
+                    "UIDL parse failure.",
+                    make_pop3_detail("UIDL", msg));
+            uidl_list[num] = std::move(uidl);
+            co_return ok(uidl_list);
         }
 
         while (true)
         {
-            std::string line = co_await dlg_.read_line(use_awaitable);
+            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -943,45 +1055,48 @@ private:
             std::istringstream iss(line);
             unsigned num = 0;
             std::string uidl;
-            if (iss >> num >> uidl)
-                uidl_list[num] = std::move(uidl);
+            if (!(iss >> num >> uidl))
+                co_return fail<uidl_list_t>(map_pop3_error(error_kind::response),
+                    "UIDL parse failure.",
+                    make_pop3_detail("UIDL", line));
+            uidl_list[num] = std::move(uidl);
         }
-        co_return uidl_list;
+        co_return ok(uidl_list);
     }
 
-    awaitable<std::string> retr_impl(unsigned long message_no)
+    awaitable<result<std::string>> retr_impl(unsigned long message_no)
     {
-        ensure_state(state_t::TRANSACTION, "RETR");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "RETR"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "RETR ");
         mailxx::detail::append_uint(cmd, message_no);
-        co_await send_command(cmd);
-        (void)co_await read_ok_response("Fetching message failure.");
+        MAILXX_TRY_CO_AWAIT(send_command(cmd));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Fetching message failure.", "RETR"));
 
         std::string msg_str;
         while (true)
         {
-            std::string line = co_await dlg_.read_line(use_awaitable);
+            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
                 line.erase(0, 1);
             msg_str += line + "\r\n";
         }
-        co_return msg_str;
+        co_return ok(msg_str);
     }
 
-    awaitable<std::string> retr_with_progress_impl(
+    awaitable<result<std::string>> retr_with_progress_impl(
         unsigned long message_no,
         unsigned long expected_size,
         progress_callback_t progress)
     {
-        ensure_state(state_t::TRANSACTION, "RETR");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "RETR"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "RETR ");
         mailxx::detail::append_uint(cmd, message_no);
-        co_await send_command(cmd);
-        (void)co_await read_ok_response("Fetching message failure.");
+        MAILXX_TRY_CO_AWAIT(send_command(cmd));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Fetching message failure.", "RETR"));
 
         std::string msg_str;
         msg_str.reserve(expected_size > 0 ? expected_size : 8192);
@@ -998,7 +1113,7 @@ private:
 
         while (true)
         {
-            std::string line = co_await dlg_.read_line(use_awaitable);
+            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -1023,72 +1138,76 @@ private:
             progress(info);
         }
 
-        co_return msg_str;
+        co_return ok(msg_str);
     }
 
-    awaitable<std::string> top_impl(unsigned message_no, unsigned lines)
+    awaitable<result<std::string>> top_impl(unsigned message_no, unsigned lines)
     {
-        ensure_state(state_t::TRANSACTION, "TOP");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "TOP"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "TOP ");
         mailxx::detail::append_uint(cmd, message_no);
         mailxx::detail::append_space(cmd);
         mailxx::detail::append_uint(cmd, lines);
-        co_await send_command(cmd);
-        (void)co_await read_ok_response("Fetching top lines failure.");
+        MAILXX_TRY_CO_AWAIT(send_command(cmd));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Fetching top lines failure.", "TOP"));
 
         std::string msg_str;
         while (true)
         {
-            std::string line = co_await dlg_.read_line(use_awaitable);
+            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
                 line.erase(0, 1);
             msg_str += line + "\r\n";
         }
-        co_return msg_str;
+        co_return ok(msg_str);
     }
 
-    awaitable<mailxx::message> retr_message_impl(unsigned message_no)
+    awaitable<result<mailxx::message>> retr_message_impl(unsigned message_no)
     {
         // Note: retr_impl already checks TRANSACTION state
-        std::string msg_str = co_await retr_impl(message_no);
+        std::string msg_str = MAILXX_CO_TRY(co_await retr_impl(message_no));
         mailxx::message msg;
-        msg.parse(msg_str);
-        co_return msg;
+        MAILXX_TRY_ASSIGN(msg, mailxx::message::parse_result(msg_str));
+        co_return ok(std::move(msg));
     }
 
-    awaitable<void> dele_impl(unsigned long message_no)
+    awaitable<result_void> dele_impl(unsigned long message_no)
     {
-        ensure_state(state_t::TRANSACTION, "DELE");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "DELE"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "DELE ");
         mailxx::detail::append_uint(cmd, message_no);
-        co_await send_command(cmd);
-        (void)co_await read_ok_response("Removing message failure.");
+        MAILXX_TRY_CO_AWAIT(send_command(cmd));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Removing message failure.", "DELE"));
+        co_return ok();
     }
 
-    awaitable<void> rset_impl()
+    awaitable<result_void> rset_impl()
     {
-        ensure_state(state_t::TRANSACTION, "RSET");
-        co_await send_command("RSET");
-        (void)co_await read_ok_response("Reset failure.");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "RSET"));
+        MAILXX_TRY_CO_AWAIT(send_command("RSET"));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Reset failure.", "RSET"));
+        co_return ok();
     }
 
-    awaitable<void> noop_impl()
+    awaitable<result_void> noop_impl()
     {
-        ensure_state(state_t::TRANSACTION, "NOOP");
-        co_await send_command("NOOP");
-        (void)co_await read_ok_response("Noop failure.");
+        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "NOOP"));
+        MAILXX_TRY_CO_AWAIT(send_command("NOOP"));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Noop failure.", "NOOP"));
+        co_return ok();
     }
 
-    awaitable<void> quit_impl()
+    awaitable<result_void> quit_impl()
     {
-        ensure_state_at_least(state_t::GREETING, "QUIT");
-        co_await send_command("QUIT");
-        (void)co_await read_ok_response("Quit failure.");
+        MAILXX_TRY(ensure_state_at_least(state_t::GREETING, "QUIT"));
+        MAILXX_TRY_CO_AWAIT(send_command("QUIT"));
+        MAILXX_TRY_CO_AWAIT(read_ok_response("Quit failure.", "QUIT"));
         state_ = state_t::UPDATE;
+        co_return ok();
     }
 
     static void parse_capability_line(capabilities_t& caps, std::string_view line)
@@ -1129,18 +1248,21 @@ private:
         }
     }
 
-    awaitable<void> send_command(const std::string& command)
+    awaitable<result_void> send_command(const std::string& command)
     {
-        co_await dlg_.write_line(command, use_awaitable);
+        co_return co_await dlg_.write_line_r(command);
     }
 
-    awaitable<std::string> read_ok_response(const std::string& error_message)
+    awaitable<result<std::string>> read_ok_response(
+        const std::string& error_message,
+        std::string_view command,
+        error_kind kind = error_kind::response)
     {
-        std::string line = co_await dlg_.read_line(use_awaitable);
-        auto [status, msg] = parse_status(line);
+        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+        auto [status, msg] = MAILXX_CO_TRY(parse_status(line, command));
         if (!is_ok(status))
-            throw error(error_message, msg);
-        co_return msg;
+            co_return fail<std::string>(map_pop3_error(kind, status), error_message, make_pop3_detail(command, line));
+        co_return ok(msg);
     }
 
     static const char* state_to_string(state_t state) noexcept
@@ -1179,16 +1301,36 @@ private:
         return details;
     }
 
-    void ensure_state(state_t required, const char* operation) const
+    [[nodiscard]] static result_void validate_no_crlf_or_nul(std::string_view value, const char* field)
     {
-        if (state_ != required)
-            throw error(std::string(operation) + ": invalid state", state_details_exact(required, state_));
+        if (!mailxx::detail::contains_crlf_or_nul(value))
+            return ok();
+
+        std::string message = "Invalid ";
+        message += field ? field : "value";
+        message += ": CR/LF or NUL not allowed.";
+        std::string_view command = field ? std::string_view(field) : std::string_view("input");
+        return fail_void(map_pop3_error(error_kind::invalid_state),
+            std::move(message),
+            make_pop3_detail(command));
     }
 
-    void ensure_state_at_least(state_t minimum, const char* operation) const
+    [[nodiscard]] result_void ensure_state(state_t required, const char* operation) const
+    {
+        if (state_ != required)
+            return fail_void(map_pop3_error(error_kind::invalid_state),
+                std::string(operation) + ": invalid state",
+                make_pop3_detail(operation, state_details_exact(required, state_)));
+        return ok();
+    }
+
+    [[nodiscard]] result_void ensure_state_at_least(state_t minimum, const char* operation) const
     {
         if (static_cast<int>(state_) < static_cast<int>(minimum))
-            throw error(std::string(operation) + ": invalid state", state_details_at_least(minimum, state_));
+            return fail_void(map_pop3_error(error_kind::invalid_state),
+                std::string(operation) + ": invalid state",
+                make_pop3_detail(operation, state_details_at_least(minimum, state_)));
+        return ok();
     }
 
     options options_;

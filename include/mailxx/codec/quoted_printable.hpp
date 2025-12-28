@@ -18,6 +18,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <sstream>
 #include <boost/algorithm/string/trim.hpp>
 #include <mailxx/codec/codec.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/export.hpp>
 
 
@@ -66,7 +67,7 @@ public:
     @throw codec_error Bad character.
     @throw codec_error Bad CRLF sequence.
     **/
-    std::vector<std::string> encode(const std::string& text) const
+    result<std::vector<std::string>> encode(const std::string& text) const
     {
         std::vector<std::string> enc_text;
         std::string line;
@@ -191,10 +192,17 @@ public:
             else if (*ch == CR_CHAR)
             {
                 if (q_codec_mode_)
-                    throw codec_error("Bad character `" + std::string(1, *ch) + "`.");
+                {
+                    std::string detail = "bad character `";
+                    detail += *ch;
+                    detail += "`";
+                    return fail<std::vector<std::string>>(errc::codec_invalid_input,
+                        "invalid quoted-printable input", std::move(detail));
+                }
 
                 if (ch + 1 == text.end() || (ch + 1 != text.end() && *(ch + 1) != LF_CHAR))
-                    throw codec_error("Bad CRLF sequence.");
+                    return fail<std::vector<std::string>>(errc::codec_invalid_input,
+                        "invalid quoted-printable input", "bad CRLF sequence");
                 add_new_line(line);
                 // Two characters have to be skipped.
                 ch++;
@@ -235,7 +243,7 @@ public:
         while (!enc_text.empty() && enc_text.back().empty())
             enc_text.pop_back();
 
-        return enc_text;
+        return ok(std::move(enc_text));
     }
 
     /**
@@ -247,19 +255,26 @@ public:
     @throw codec_error Bad character.
     @throw codec_error Bad hexadecimal digit.
     **/
-    std::string decode(const std::vector<std::string>& text) const
+    result<std::string> decode(const std::vector<std::string>& text) const
     {
         std::string dec_text;
         for (const auto& line : text)
         {
             if (line.length() > lines_policy_ - 2)
-                throw codec_error("Bad line policy.");
+                return fail<std::string>(errc::codec_invalid_input,
+                    "invalid quoted-printable input", "bad line policy");
 
             bool soft_break = false;
             for (std::string::const_iterator ch = line.begin(); ch != line.end(); ch++)
             {
                 if (!is_allowed(*ch))
-                    throw codec_error("Bad character `" + std::string(1, *ch) + "`.");
+                {
+                    std::string detail = "bad character `";
+                    detail += *ch;
+                    detail += "`";
+                    return fail<std::string>(errc::codec_invalid_input,
+                        "invalid quoted-printable input", std::move(detail));
+                }
 
                 if (*ch == EQUAL_CHAR)
                 {
@@ -273,10 +288,12 @@ public:
                     char next_char = std::toupper(static_cast<unsigned char>(*(ch + 1)));
                     char next_next_char = std::toupper(static_cast<unsigned char>(*(ch + 2)));
                     if (!is_allowed(next_char) || !is_allowed(next_next_char))
-                        throw codec_error("Bad character.");
+                        return fail<std::string>(errc::codec_invalid_input,
+                            "invalid quoted-printable input", "bad character");
 
                     if (HEX_DIGITS.find(next_char) == std::string::npos || HEX_DIGITS.find(next_next_char) == std::string::npos)
-                        throw codec_error("Bad hexadecimal digit.");
+                        return fail<std::string>(errc::codec_invalid_input,
+                            "invalid quoted-printable input", "bad hexadecimal digit");
                     int nc_val = hex_digit_to_int(next_char);
                     int nnc_val = hex_digit_to_int(next_next_char);
                     dec_text += ((nc_val << 4) + nnc_val);
@@ -295,7 +312,7 @@ public:
         }
         boost::trim_right(dec_text);
 
-        return dec_text;
+        return ok(std::move(dec_text));
     }
 
     /**

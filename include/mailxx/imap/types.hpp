@@ -11,6 +11,7 @@
 #include <system_error>
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/detail/append.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/detail/sanitize.hpp>
 #include <mailxx/imap/utf7.hpp>
 #include <mailxx/net/dialog.hpp>
@@ -44,16 +45,19 @@ struct credentials
     std::string secret; // password or bearer token
 };
 
-[[nodiscard]] inline std::string to_astring(std::string_view text)
+[[nodiscard]] inline result<std::string> to_astring(std::string_view text)
 {
-    mailxx::detail::ensure_no_crlf_or_nul(text, "astring");
+    MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(text, "astring"));
     std::string escaped = mailxx::codec::escape_string(std::string(text), "\"\\");
-    return mailxx::codec::surround_string(escaped);
+    return mailxx::ok(mailxx::codec::surround_string(escaped));
 }
 
-[[nodiscard]] inline std::string to_mailbox(std::string_view utf8_mailbox)
+[[nodiscard]] inline result<std::string> to_mailbox(std::string_view utf8_mailbox)
 {
-    return to_astring(mailxx::encode_modified_utf7(utf8_mailbox));
+    auto encoded = mailxx::encode_modified_utf7(utf8_mailbox);
+    if (!encoded)
+        return mailxx::fail<std::string>(std::move(encoded).error());
+    return to_astring(*encoded);
 }
 
 struct mailbox_stat
@@ -120,14 +124,15 @@ namespace detail
         return true;
     }
 
-    [[nodiscard]] inline std::string build_append_command(std::string_view mailbox, std::size_t size,
+    [[nodiscard]] inline result<std::string> build_append_command(std::string_view mailbox, std::size_t size,
         std::string_view flags, std::string_view date_time, bool literal_plus)
     {
-        mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox");
-        mailxx::detail::ensure_no_crlf_or_nul(flags, "flags");
-        mailxx::detail::ensure_no_crlf_or_nul(date_time, "date_time");
+        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox"));
+        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(flags, "flags"));
+        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(date_time, "date_time"));
 
-        const std::string mailbox_q = mailxx::imap::to_mailbox(mailbox);
+        std::string mailbox_q;
+        MAILXX_TRY_ASSIGN(mailbox_q, mailxx::imap::to_mailbox(mailbox));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "APPEND");
         mailxx::detail::append_space(cmd);
@@ -139,7 +144,8 @@ namespace detail
         }
         if (!date_time.empty())
         {
-            const std::string dt = mailxx::imap::to_astring(date_time);
+            std::string dt;
+            MAILXX_TRY_ASSIGN(dt, mailxx::imap::to_astring(date_time));
             mailxx::detail::append_space(cmd);
             mailxx::detail::append_sv(cmd, dt);
         }
@@ -149,7 +155,7 @@ namespace detail
         if (literal_plus)
             mailxx::detail::append_char(cmd, '+');
         mailxx::detail::append_char(cmd, '}');
-        return cmd;
+        return mailxx::ok(std::move(cmd));
     }
 } // namespace detail
 

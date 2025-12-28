@@ -19,13 +19,21 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #endif
 
 #include <string>
+#include <array>
+#include <cstddef>
 #include <utility>
 #include <vector>
 #include <stdexcept>
 #include <map>
+#include <span>
+#include <optional>
+#include <fstream>
 #include <boost/regex.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <mailxx/codec/codec.hpp>
+#include <mailxx/codec/base64_stream.hpp>
+#include <mailxx/detail/output_sink.hpp>
+#include <mailxx/mime/attachment_source.hpp>
 #include <mailxx/export.hpp>
 
 
@@ -281,6 +289,16 @@ public:
     void format(std::string& mime_str, bool dot_escape = true) const;
 
     /**
+    Formatting the mime part to a sink without buffering the whole body.
+
+    @param sink       Output sink to write into.
+    @param dot_escape Flag if the leading dot should be escaped.
+    @throw mime_error Formatting failure, non multipart message with boundary.
+    @throw *          `format_header()`, `format_content(bool)`.
+    **/
+    void format_to(detail::output_sink& sink, bool dot_escape = true) const;
+
+    /**
     Overload of `format(string&, bool)`.
 
     Because of the way the u8string is comverted to string, it's more expensive when used with C++20.
@@ -456,6 +474,21 @@ public:
     @return Content as string.
     **/
     std::string content() const;
+
+    /**
+    Setting the attachment source (in-memory or file path). If an in-memory
+    source is provided, the bytes are also copied to the content buffer.
+
+    @param src Attachment source to set.
+    **/
+    void attachment_source(const mailxx::attachment_source& src);
+
+    /**
+    Getting the attachment source, if any.
+
+    @return Optional attachment source.
+    **/
+    const std::optional<attachment_source>& attachment_source() const;
 
     /**
     Adding a mime part.
@@ -972,6 +1005,11 @@ protected:
     std::string content_;
 
     /**
+    Optional attachment source (file-backed or in-memory) used for streaming output.
+    **/
+    std::optional<attachment_source> attachment_source_;
+
+    /**
     Keeps containing mime parts, if any; otherwise, it's empty vector.
     **/
     std::vector<mime> parts_;
@@ -1038,6 +1076,122 @@ protected:
     **/
     std::string details_;
 };
+
+// ------------------------------------------------------------
+// Header-only helpers for streaming output
+// ------------------------------------------------------------
+inline void mime::attachment_source(const mailxx::attachment_source& src)
+{
+    attachment_source_ = src;
+    if (attachment_source_->kind == source_kind::in_memory)
+        content_ = attachment_source_->bytes;
+    else
+        content_.clear();
+}
+
+inline const std::optional<attachment_source>& mime::attachment_source() const
+{
+    return attachment_source_;
+}
+
+inline void mime::format_to(detail::output_sink& sink, bool dot_escape) const
+{
+    sink.write(format_header());
+
+    if (!parts_.empty())
+    {
+        const auto& bound = content_type_.boundary();
+        const auto boundary_prefix = BOUNDARY_DELIMITER + bound + codec::END_OF_LINE;
+
+        if (!content_.empty())
+        {
+            mime content_part;
+            content_part.content(content_);
+            content_type_t ct(content_type_.media_type(), content_type_.media_subtype(), content_type_.charset());
+            content_part.content_type(ct);
+            content_part.content_transfer_encoding(encoding_);
+            content_part.line_policy(line_policy_);
+            content_part.strict_mode(strict_mode_);
+            content_part.strict_codec_mode(strict_codec_mode_);
+            sink.write(boundary_prefix);
+            content_part.format_to(sink, dot_escape);
+            sink.write(codec::END_OF_LINE);
+        }
+
+        for (const auto& p : parts_)
+        {
+            sink.write(boundary_prefix);
+            p.format_to(sink, dot_escape);
+            sink.write(codec::END_OF_LINE);
+        }
+        sink.write(BOUNDARY_DELIMITER + bound + BOUNDARY_DELIMITER + codec::END_OF_LINE);
+        return;
+    }
+
+    if (attachment_source_)
+    {
+        const auto& src = *attachment_source_;
+        const auto append_base64_newline = [this, &sink](auto&& updater) {
+            base64_stream_encoder enc(static_cast<std::size_t>(line_policy_), codec::END_OF_LINE);
+            updater(enc);
+            enc.finalize(sink);
+            sink.write(codec::END_OF_LINE);
+        };
+
+        if (src.kind == source_kind::file_path)
+        {
+            std::ifstream ifs(src.path, std::ios::binary);
+            if (!ifs)
+                throw mime_error("mime format error", "Cannot open attachment file `" + src.path + "`.");
+
+            if (encoding_ == content_transfer_encoding_t::BASE_64)
+            {
+                append_base64_newline([&](base64_stream_encoder& enc) {
+                    std::array<std::byte, 4096> buffer{};
+                    while (ifs)
+                    {
+                        ifs.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
+                        auto got = ifs.gcount();
+                        if (got > 0)
+                            enc.update(std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(got)), sink);
+                    }
+                });
+            }
+            else
+            {
+                std::array<char, 4096> buffer{};
+                while (ifs)
+                {
+                    ifs.read(buffer.data(), buffer.size());
+                    auto got = ifs.gcount();
+                    if (got > 0)
+                        sink.write(std::string_view(buffer.data(), static_cast<std::size_t>(got)));
+                }
+                sink.write(codec::END_OF_LINE);
+            }
+            return;
+        }
+
+        if (src.kind == source_kind::in_memory)
+        {
+            if (encoding_ == content_transfer_encoding_t::BASE_64)
+            {
+                const auto* data = reinterpret_cast<const std::byte*>(src.bytes.data());
+                append_base64_newline([&](base64_stream_encoder& enc) {
+                    enc.update(std::span<const std::byte>(data, src.bytes.size()), sink);
+                });
+            }
+            else
+            {
+                sink.write(src.bytes);
+                sink.write(codec::END_OF_LINE);
+            }
+            return;
+        }
+    }
+
+    sink.write(format_content(dot_escape));
+}
 
 
 } // namespace mailxx

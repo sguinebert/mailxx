@@ -20,6 +20,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <cctype>
 #include <boost/algorithm/string.hpp>
 #include <mailxx/codec/codec.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/export.hpp>
 
 
@@ -112,7 +113,7 @@ public:
     @return    Decoded string.
     @todo      Implement the line policies.
     **/
-    std::string decode(const std::string& txt) const
+    result<std::string> decode(const std::string& txt) const
     {
         std::string dec_text;
         for (std::string::const_iterator ch = txt.begin(); ch != txt.end(); ch++)
@@ -120,9 +121,9 @@ public:
             if (*ch == codec::PERCENT_HEX_FLAG)
             {
                 if (ch + 1 == txt.end() || ch + 2 == txt.end())
-                    throw codec_error("Bad character.");
+                    return fail<std::string>(errc::codec_invalid_input, "invalid percent input", "bad character");
                 if (std::isxdigit(static_cast<unsigned char>(*(ch + 1))) == 0 || std::isxdigit(static_cast<unsigned char>(*(ch + 2))) == 0)
-                    throw codec_error("Bad character.");
+                    return fail<std::string>(errc::codec_invalid_input, "invalid percent input", "bad character");
 
                 char next_char = std::toupper(static_cast<unsigned char>(*(ch + 1)));
                 char next_next_char = std::toupper(static_cast<unsigned char>(*(ch + 2)));
@@ -134,7 +135,7 @@ public:
             else
                 dec_text += *ch;
         }
-        return dec_text;
+        return ok(std::move(dec_text));
     }
 };
 

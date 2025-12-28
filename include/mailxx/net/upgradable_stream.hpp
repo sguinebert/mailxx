@@ -28,6 +28,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/net/tls_error.hpp>
 #include <mailxx/net/tls_options.hpp>
 #include <mailxx/net/tls_trust_store.hpp>
@@ -107,18 +108,22 @@ public:
         }, stream_);
     }
 
-    awaitable<void> start_tls(ssl::context& context, std::string sni)
+    awaitable<mailxx::result<void>> start_tls(ssl::context& context, std::string sni)
     {
         co_return co_await start_tls(context, std::move(sni), tls_options{});
     }
 
-    awaitable<void> start_tls(ssl::context& context, std::string sni, const tls_options& opt)
+    awaitable<mailxx::result<void>> start_tls(ssl::context& context, std::string sni, const tls_options& opt)
     {
         if (is_tls())
-            co_return;
+            co_return mailxx::ok();
 
-        configure_trust_store(context, opt);
-        apply_tls_hardening(context, opt);
+        auto trust_res = configure_trust_store(context, opt);
+        if (!trust_res)
+            co_return mailxx::fail<void>(std::move(trust_res).error());
+        auto harden_res = apply_tls_hardening(context, opt);
+        if (!harden_res)
+            co_return mailxx::fail<void>(std::move(harden_res).error());
 
         auto socket = std::move(std::get<tcp::socket>(stream_));
         stream_.template emplace<ssl_stream>(std::move(socket), context);
@@ -146,7 +151,8 @@ public:
                 {
                     hostname = sni;
                     if (hostname.empty())
-                        throw tls_error("TLS hostname verification requires a host name.");
+                        co_return mailxx::fail<void>(errc::tls_verify_failed,
+                            "TLS hostname verification requires a host name.");
                 }
 #if defined(MAILXX_HAS_SSL_HOST_NAME_VERIFICATION)
                 if (opt.verify_host)
@@ -194,8 +200,17 @@ public:
             }
         }
 
-        co_await tls_stream.async_handshake(ssl::stream_base::client, use_awaitable);
-        enforce_pins(tls_stream, opt);
+        auto [ec] = co_await tls_stream.async_handshake(ssl::stream_base::client, use_nothrow_awaitable);
+        if (ec)
+        {
+            co_return mailxx::fail<void>(errc::tls_handshake_failed,
+                "TLS handshake failed.", ec.message(), ec);
+        }
+
+        auto pin_res = enforce_pins(tls_stream, opt);
+        if (!pin_res)
+            co_return mailxx::fail<void>(std::move(pin_res).error());
+        co_return mailxx::ok();
     }
 
 private:
@@ -209,7 +224,7 @@ private:
         return std::string(buffer);
     }
 
-    static void apply_tls_hardening(ssl::context& context, const tls_options& opt)
+    static result<void> apply_tls_hardening(ssl::context& context, const tls_options& opt)
     {
         // Applies policy to the SSL_CTX; does not override existing min version.
         if (opt.min_tls_version.has_value())
@@ -220,8 +235,8 @@ private:
                 if (SSL_CTX_set_min_proto_version(context.native_handle(),
                         opt.min_tls_version.value()) != 1)
                 {
-                    throw tls_error("TLS min version configuration failed.",
-                        openssl_error_message());
+                    return fail<void>(errc::tls_handshake_failed,
+                        "TLS min version configuration failed.", openssl_error_message());
                 }
             }
         }
@@ -231,10 +246,11 @@ private:
             if (SSL_CTX_set_cipher_list(context.native_handle(),
                     opt.cipher_list.c_str()) != 1)
             {
-                throw tls_error("TLS cipher list configuration failed.",
-                    openssl_error_message());
+                return fail<void>(errc::tls_handshake_failed,
+                    "TLS cipher list configuration failed.", openssl_error_message());
             }
         }
+        return ok();
     }
 
     static bool relax_verify(bool preverified, ssl::verify_context& ctx,
@@ -276,7 +292,7 @@ private:
         return length == hex_len || length == base64_len;
     }
 
-    static std::vector<std::string> normalize_pins(
+    static result<std::vector<std::string>> normalize_pins(
         const std::vector<std::string>& pins, const char* label)
     {
         std::vector<std::string> out;
@@ -287,10 +303,11 @@ private:
             if (normalized.empty())
                 continue;
             if (!valid_pin_length(normalized.size()))
-                throw tls_error(std::string("TLS pinning failure: invalid ") + label + " pin.");
+                return fail<std::vector<std::string>>(errc::tls_pinning_failed,
+                    std::string("TLS pinning failure: invalid ") + label + " pin.");
             out.push_back(std::move(normalized));
         }
-        return out;
+        return ok(std::move(out));
     }
 
     static std::string digest_to_hex(const unsigned char* digest, std::size_t size)
@@ -366,17 +383,23 @@ private:
         return matched;
     }
 
-    static void enforce_pins(ssl_stream& tls_stream, const tls_options& opt)
+    static result<void> enforce_pins(ssl_stream& tls_stream, const tls_options& opt)
     {
-        const std::vector<std::string> cert_pins = normalize_pins(opt.pinned_cert_sha256, "cert");
-        const std::vector<std::string> spki_pins = normalize_pins(opt.pinned_spki_sha256, "spki");
+        auto cert_pins_res = normalize_pins(opt.pinned_cert_sha256, "cert");
+        if (!cert_pins_res)
+            return fail<void>(std::move(cert_pins_res).error());
+        auto spki_pins_res = normalize_pins(opt.pinned_spki_sha256, "spki");
+        if (!spki_pins_res)
+            return fail<void>(std::move(spki_pins_res).error());
+        const std::vector<std::string> cert_pins = std::move(*cert_pins_res);
+        const std::vector<std::string> spki_pins = std::move(*spki_pins_res);
         if (cert_pins.empty() && spki_pins.empty())
-            return;
+            return ok();
 
         std::unique_ptr<X509, decltype(&X509_free)> cert(
             SSL_get_peer_certificate(tls_stream.native_handle()), X509_free);
         if (!cert)
-            throw tls_error("TLS pinning failure: no peer certificate.");
+            return fail<void>(errc::tls_pinning_failed, "TLS pinning failure: no peer certificate.");
 
         bool matched = false;
         if (!cert_pins.empty())
@@ -384,7 +407,7 @@ private:
             std::string cert_hex;
             std::string cert_base64;
             if (!sha256_cert(cert.get(), cert_hex, cert_base64))
-                throw tls_error("TLS pinning failure: unable to hash certificate.");
+                return fail<void>(errc::tls_pinning_failed, "TLS pinning failure: unable to hash certificate.");
             matched |= match_pins(cert_pins, cert_hex, cert_base64);
         }
         if (!spki_pins.empty())
@@ -392,12 +415,13 @@ private:
             std::string spki_hex;
             std::string spki_base64;
             if (!sha256_spki(cert.get(), spki_hex, spki_base64))
-                throw tls_error("TLS pinning failure: unable to hash SPKI.");
+                return fail<void>(errc::tls_pinning_failed, "TLS pinning failure: unable to hash SPKI.");
             matched |= match_pins(spki_pins, spki_hex, spki_base64);
         }
 
         if (!matched)
-            throw tls_error("TLS pinning failure: certificate mismatch.");
+            return fail<void>(errc::tls_pinning_failed, "TLS pinning failure: certificate mismatch.");
+        return ok();
     }
 
     std::variant<tcp::socket, ssl_stream> stream_;
