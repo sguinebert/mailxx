@@ -47,200 +47,119 @@ git clone https://github.com/sguinebert/mailxx.git
 
 ### Send an Email
 
-mailxx supports multiple async patterns. Choose what fits your project:
+mailxx exposes a coroutine-only async API for performance and simplicity. A single code path means fewer executor edge
+cases, no callback/future wrappers, and consistent error handling via `result<T>`.
 
-#### 🔹 Coroutines (C++20/23)
+If you need to drive it from callback-based code, you can bridge with `co_spawn` and invoke your handler when the
+coroutine completes (example below). You can also pass any Asio completion token to
+`co_spawn(io, task, token)`, but the raw handler receives `std::exception_ptr`, so the pattern below keeps
+`error_info` at the boundary.
+
+#### Coroutines (C++20/23)
 
 ```cpp
 #include <mailxx/mailxx.hpp>
 
-mailxx::task<void> send_email() {
-    mailxx::asio::io_context io;
-    mailxx::smtp::client smtp(io, "smtp.gmail.com", 587);
+mailxx::asio::awaitable<void> send_email(mailxx::smtp::client& smtp)
+{
+    if (auto res = co_await smtp.connect("smtp.gmail.com", 587); !res) co_return;
+    if (auto res = co_await smtp.read_greeting(); !res) co_return;
+    if (auto res = co_await smtp.ehlo(); !res) co_return;
 
-    co_await smtp.async_connect();
-    co_await smtp.async_starttls();
-    co_await smtp.async_authenticate("user@gmail.com", "app-password", 
-                                      mailxx::smtp::auth_method::login);
+    mailxx::asio::ssl::context tls_ctx(mailxx::asio::ssl::context::tls_client);
+    if (auto res = co_await smtp.start_tls(tls_ctx); !res) co_return;
+    if (auto res = co_await smtp.ehlo(); !res) co_return;
 
-    mailxx::mime::message msg;
+    if (auto res = co_await smtp.authenticate("user@gmail.com", "app-password",
+                                              mailxx::smtp::auth_method::login); !res) co_return;
+
+    mailxx::message msg;
     msg.from({"Sender Name", "sender@gmail.com"});
     msg.add_recipient({"Recipient", "recipient@example.com"});
     msg.subject("Hello from mailxx!");
     msg.content("This is a test email sent with mailxx.");
 
-    co_await smtp.async_send(msg);
-    co_await smtp.async_quit();
+    if (auto res = co_await smtp.send(msg); !res) co_return;
+    if (auto res = co_await smtp.quit(); !res) co_return;
+}
+
+int main()
+{
+    mailxx::asio::io_context io;
+    mailxx::smtp::client smtp(io);
+
+    mailxx::asio::co_spawn(io, send_email(smtp), mailxx::asio::detached);
+    io.run();
 }
 ```
 
-#### 🔹 Callbacks (Traditional Async)
+#### Bridge with co_spawn (callbacks or futures)
 
 ```cpp
 #include <mailxx/mailxx.hpp>
 
 mailxx::asio::io_context io;
-mailxx::smtp::client smtp(io, "smtp.gmail.com", 587);
+mailxx::smtp::client smtp(io);
 
-smtp.async_connect([&](mailxx::error_code ec) {
-    if (ec) { std::cerr << "Connect failed: " << ec.message() << "\n"; return; }
-    
-    smtp.async_starttls([&](mailxx::error_code ec) {
-        if (ec) { std::cerr << "STARTTLS failed: " << ec.message() << "\n"; return; }
-        
-        smtp.async_authenticate("user@gmail.com", "app-password",
-                                 mailxx::smtp::auth_method::login,
-                                 [&](mailxx::error_code ec) {
-            if (ec) { std::cerr << "Auth failed: " << ec.message() << "\n"; return; }
-            
-            mailxx::mime::message msg;
-            msg.from({"Sender", "sender@gmail.com"});
-            msg.add_recipient({"Recipient", "recipient@example.com"});
-            msg.subject("Hello from mailxx!");
-            msg.content("Callback style!");
-            
-            smtp.async_send(msg, [&](mailxx::error_code ec) {
-                if (!ec) std::cout << "Email sent!\n";
-                smtp.async_quit([](auto) {});
-            });
-        });
-    });
-});
+auto on_done = [](const mailxx::error_info& err) {
+    if (err.code != mailxx::errc::ok)
+        std::cerr << "SMTP failed: " << err.message << "\n";
+};
+
+mailxx::asio::co_spawn(io,
+    [&]() -> mailxx::asio::awaitable<void> {
+        if (auto res = co_await smtp.connect("smtp.gmail.com", 587); !res) { on_done(res.error()); co_return; }
+        if (auto res = co_await smtp.read_greeting(); !res) { on_done(res.error()); co_return; }
+        if (auto res = co_await smtp.ehlo(); !res) { on_done(res.error()); co_return; }
+        on_done({});
+    },
+    mailxx::asio::detached);
 
 io.run();
 ```
 
-#### 🔹 Futures (std::future)
-
-```cpp
-#include <mailxx/mailxx.hpp>
-
-mailxx::asio::io_context io;
-mailxx::smtp::client smtp(io, "smtp.gmail.com", 587);
-
-// Use mailxx::use_future token
-std::future<void> fut = smtp.async_connect(mailxx::use_future);
-
-std::thread io_thread([&]() { io.run(); });
-
-fut.get();  // Wait for connection
-
-auto auth_fut = smtp.async_authenticate("user@gmail.com", "app-password",
-                                         mailxx::smtp::auth_method::login,
-                                         mailxx::use_future);
-auth_fut.get();
-
-mailxx::mime::message msg;
-// ... setup message ...
-
-smtp.async_send(msg, mailxx::use_future).get();
-smtp.async_quit(mailxx::use_future).get();
-
-io_thread.join();
-```
-
-#### 🔹 Synchronous (Blocking)
-
-```cpp
-#include <mailxx/mailxx.hpp>
-
-mailxx::asio::io_context io;
-mailxx::smtp::client smtp(io, "smtp.gmail.com", 587);
-
-// Simple blocking calls
-smtp.connect();
-smtp.starttls();
-smtp.authenticate("user@gmail.com", "app-password", 
-                   mailxx::smtp::auth_method::login);
-
-mailxx::mime::message msg;
-msg.from({"Sender Name", "sender@gmail.com"});
-msg.add_recipient({"Recipient", "recipient@example.com"});
-msg.subject("Hello from mailxx!");
-msg.content("Synchronous style - simple and straightforward.");
-
-smtp.send(msg);
-smtp.quit();
-```
+To return a `std::future`, use `mailxx::asio::co_spawn(io, task, mailxx::asio::use_future)`.
 
 ### Receive Emails (IMAP)
 
-#### Coroutines
+#### Coroutines (C++20/23)
 
 ```cpp
 #include <mailxx/mailxx.hpp>
 
-mailxx::task<void> fetch_emails() {
-    mailxx::asio::io_context io;
-    mailxx::imap::client imap(io, "imap.gmail.com", 993);
+mailxx::asio::awaitable<void> fetch_emails(mailxx::imap::client& imap)
+{
+    mailxx::asio::ssl::context tls_ctx(mailxx::asio::ssl::context::tls_client);
+    if (auto res = co_await imap.connect("imap.gmail.com", 993, mailxx::net::tls_mode::implicit, &tls_ctx); !res)
+        co_return;
+    if (auto res = co_await imap.read_greeting(); !res) co_return;
+    if (auto res = co_await imap.login("user@gmail.com", "app-password"); !res) co_return;
 
-    co_await imap.async_connect_ssl();
-    co_await imap.async_authenticate("user@gmail.com", "app-password",
-                                      mailxx::imap::auth_method::login);
+    if (auto sel = co_await imap.select("INBOX"); !sel) co_return;
+    auto uids = co_await imap.uid_search("ALL");
+    if (!uids || uids->empty()) co_return;
 
-    co_await imap.async_select("INBOX");
+    auto msg = co_await imap.uid_fetch_rfc822(uids->front());
+    if (msg)
+        std::cout << "Subject: " << msg->subject() << "\n";
 
-    // Fetch message
-    auto msg = co_await imap.async_fetch(1);
-    std::cout << "Subject: " << msg.subject() << "\n";
-    std::cout << "From: " << msg.from().name << "\n";
-
-    co_await imap.async_logout();
+    (void)co_await imap.logout();
 }
-```
-
-#### Callbacks with Progress
-
-```cpp
-mailxx::imap::client imap(io, "imap.gmail.com", 993);
-
-imap.async_connect_ssl([&](mailxx::error_code ec) {
-    if (ec) return;
-    
-    imap.async_authenticate("user@gmail.com", "app-password",
-                             mailxx::imap::auth_method::login,
-                             [&](mailxx::error_code ec) {
-        if (ec) return;
-        
-        imap.async_select("INBOX", [&](mailxx::error_code ec, 
-                                        const mailxx::imap::mailbox_info& info) {
-            std::cout << "Messages: " << info.exists << "\n";
-            std::cout << "Unseen: " << info.unseen << "\n";
-            
-            // Fetch with progress callback
-            mailxx::imap::fetch_options opts;
-            opts.on_progress = [](size_t bytes, size_t total) {
-                std::cout << "Progress: " << (bytes * 100 / total) << "%\n";
-            };
-            
-            imap.async_fetch(1, opts, [&](mailxx::error_code ec, 
-                                           mailxx::mime::message msg) {
-                if (!ec) {
-                    std::cout << "Subject: " << msg.subject() << "\n";
-                }
-            });
-        });
-    });
-});
 ```
 
 ### IMAP IDLE (Push Notifications)
 
 ```cpp
-// Coroutine style
-auto result = co_await imap.async_idle(std::chrono::minutes(29));
+auto idle_res = co_await imap.idle_start();
+if (!idle_res)
+    co_return;
+auto idle = std::move(*idle_res);
 
-if (result == mailxx::imap::idle_result::new_mail) {
-    std::cout << "New message arrived!\n";
-}
+auto line = co_await idle.idle_read();
+if (line)
+    std::cout << "Server update: " << *line << "\n";
 
-// Callback style with event handler
-imap.async_idle(std::chrono::minutes(29), 
-    [](mailxx::error_code ec, mailxx::imap::idle_result result) {
-        if (result == mailxx::imap::idle_result::new_mail) {
-            std::cout << "New message arrived!\n";
-        }
-    });
+(void)co_await idle.idle_stop();
 ```
 
 ### Connection Pooling
@@ -255,23 +174,17 @@ mailxx::pool::pool_config config{
     .idle_timeout = std::chrono::minutes(5)
 };
 
-mailxx::pool::smtp_pool pool(io, "smtp.example.com", 587, config);
+mailxx::pool::smtp_pool pool(io.get_executor(), config);
+mailxx::asio::ssl::context tls_ctx(mailxx::asio::ssl::context::tls_client);
+pool.configure("smtp.example.com", "587", tls_ctx,
+               mailxx::pool::pool_credentials{"user", "pass"},
+               mailxx::smtp::auth_method::login);
 
-// Coroutine style
-auto conn = co_await pool.async_acquire();
-co_await conn->async_send(message);
-// Connection automatically returned to pool
+mailxx::message message;
+// ... setup message ...
 
-// Callback style
-pool.async_acquire([&](mailxx::error_code ec, 
-                        mailxx::pool::connection_handle conn) {
-    if (ec) return;
-    
-    conn->async_send(message, [conn](mailxx::error_code ec) {
-        // conn automatically returned when handle is destroyed
-        if (!ec) std::cout << "Sent via pooled connection\n";
-    });
-});
+auto reply = co_await pool.send(message);
+// Reply available in reply.status / reply.lines
 ```
 
 ### Rate Limiting
@@ -282,29 +195,16 @@ pool.async_acquire([&](mailxx::error_code ec,
 // 100 emails per hour
 mailxx::pool::rate_limiter limiter(100, std::chrono::hours(1));
 
-// Coroutine style
 for (const auto& msg : messages) {
-    co_await limiter.async_acquire();  // Wait if rate limit exceeded
-    co_await smtp.async_send(msg);
+    co_await limiter.acquire();  // Wait if rate limit exceeded
+    (void)co_await smtp.send(msg);
 }
 
-// Callback style  
-void send_next(size_t index) {
-    if (index >= messages.size()) return;
-    
-    limiter.async_acquire([&, index](mailxx::error_code ec) {
-        smtp.async_send(messages[index], [&, index](mailxx::error_code ec) {
-            send_next(index + 1);  // Chain next send
-        });
-    });
-}
-send_next(0);
-
-// Synchronous check (non-blocking)
+// Non-blocking check
 if (limiter.try_acquire()) {
-    smtp.send(msg);
+    (void)co_await smtp.send(msg);
 } else {
-    std::cout << "Rate limit exceeded, retry in " 
+    std::cout << "Rate limit exceeded, retry in "
               << limiter.time_until_available().count() << "ms\n";
 }
 ```
@@ -315,46 +215,14 @@ if (limiter.try_acquire()) {
 mailxx::smtp::dsn_options dsn{
     .notify = mailxx::smtp::dsn_notify::success | 
               mailxx::smtp::dsn_notify::failure,
-    .return_type = mailxx::smtp::dsn_return::headers,
+    .ret = mailxx::smtp::dsn_ret::hdrs,
     .envid = "unique-envelope-id"
 };
 
-// Coroutine
-co_await smtp.async_send(msg, dsn);
-
-// Callback
-smtp.async_send(msg, dsn, [](mailxx::error_code ec) {
-    if (!ec) std::cout << "Sent with DSN request\n";
-});
-
-// Synchronous
-smtp.send(msg, dsn);
+auto reply = co_await smtp.send(msg, dsn);
 ```
 
-## 🔄 Completion Token Patterns
-
-mailxx follows the Asio completion token pattern, supporting:
-
-| Pattern | Token | Use Case |
-|---------|-------|----------|
-| Callbacks | `[](error_code, result) {}` | Traditional async, fine-grained control |
-| Coroutines | `mailxx::use_awaitable` | Modern C++20/23, clean sequential code |
-| Futures | `mailxx::use_future` | Integration with std::future workflows |
-| Deferred | `mailxx::deferred` | Lazy execution, composable operations |
-| Synchronous | *(no token)* | Simple blocking calls |
-
-```cpp
-// All these are equivalent ways to connect:
-smtp.connect();                                         // Sync
-smtp.async_connect([](auto ec) { /* ... */ });         // Callback
-co_await smtp.async_connect(mailxx::use_awaitable);    // Coroutine
-smtp.async_connect(mailxx::use_future).get();          // Future
-auto op = smtp.async_connect(mailxx::deferred);        // Deferred
-std::move(op)(handler);                                // Execute later
-```
-
-## 📁 Project Structure
-
+## Project Structure
 ```
 mailxx/
 ├── include/mailxx/
@@ -415,7 +283,7 @@ import mailxx.smtp;      // Only SMTP
 import mailxx.mime;      // Only MIME
 
 int main() {
-    mailxx::smtp::client smtp(io, "smtp.gmail.com", 587);
+    mailxx::smtp::client smtp(io);
     // ...
 }
 ```
@@ -485,3 +353,8 @@ header-only architecture, and extensive new features.
 
 - **Issues**: [GitHub Issues](https://github.com/sguinebert/mailxx/issues)
 - **Author**: Sylvain Guinebert
+
+
+
+
+

@@ -27,8 +27,7 @@ BOOST_AUTO_TEST_CASE(pop3_snapshot_after_auth)
     opts.store_credentials_for_reconnect = true;
 
     mailxx::pop3::client conn(io_ctx.get_executor(), opts);
-    conn.debug_remember_connection("pop.example.com", "995",
-        mailxx::net::tls_mode::implicit, nullptr, "pop.example.com");
+    conn.debug_remember_connection("pop.example.com", "995", mailxx::net::tls_mode::implicit, nullptr, "pop.example.com");
     conn.debug_remember_user_pass("user", "pass");
 
     const auto snap = conn.debug_snapshot();

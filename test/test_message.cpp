@@ -73,17 +73,17 @@ BOOST_AUTO_TEST_CASE(format_addresses)
 {
     message msg;
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "kontakt@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "kontakt@mailxx.dev"));
     msg.add_recipient(mail_address("kontakt", "kontakt@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.add_recipient(mail_group("all", {mail_address("Tomislav", "qwertyuiop@hotmail.com")}));
-    msg.add_cc_recipient(mail_group("mailxx", {mail_address("", "karas@mailxx.dev"), mail_address("Tomislav Karastojkovic", "kontakt@mailxx.dev")}));
-    msg.add_cc_recipient(mail_address("Tomislav Karastojkovic", "kontakt@mailxx.dev"));
+    msg.add_recipient(mail_group("all", {mail_address("Mailxx", "qwertyuiop@hotmail.com")}));
+    msg.add_cc_recipient(mail_group("mailxx", {mail_address("", "example@mailxx.dev"), mail_address("Dave cxx", "contact@mailxx.dev")}));
+    msg.add_cc_recipient(mail_address("Dave cxx", "contact@mailxx.dev"));
     msg.add_cc_recipient(mail_address("Tomislav @ Karastojkovic", "qwertyuiop@gmail.com"));
     msg.add_cc_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.add_cc_recipient(mail_group("all", {mail_address("", "qwertyuiop@hotmail.com"), mail_address("Tomislav", "qwertyuiop@gmail.com"),
         mail_address("Tomislav @ Karastojkovic", "qwertyuiop@zoho.com")}));
-    msg.add_bcc_recipient(mail_address("Tomislav Karastojkovic", "kontakt@mailxx.dev"));
+    msg.add_bcc_recipient(mail_address("Dave cxx", "kontakt@mailxx.dev"));
     msg.add_bcc_recipient(mail_address("Tomislav @ Karastojkovic", "qwertyuiop@gmail.com"));
     msg.add_bcc_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.subject("Hello, World!");
@@ -92,19 +92,19 @@ BOOST_AUTO_TEST_CASE(format_addresses)
     msg.date_time(ldt);
 
     BOOST_CHECK(msg.from_to_string() == "mailxx <adresa@mailxx.dev>");
-    BOOST_CHECK(msg.reply_address_to_string() == "Tomislav Karastojkovic <kontakt@mailxx.dev>");
+    BOOST_CHECK(msg.reply_address_to_string() == "Dave cxx <kontakt@mailxx.dev>");
     BOOST_CHECK(msg.recipients_to_string() == "kontakt <kontakt@mailxx.dev>,\r\n"
         "  mailxx <adresa@mailxx.dev>,\r\n"
         "  all: Tomislav <qwertyuiop@hotmail.com>;");
-    BOOST_CHECK(msg.cc_recipients_to_string() == "Tomislav Karastojkovic <kontakt@mailxx.dev>,\r\n"
+    BOOST_CHECK(msg.cc_recipients_to_string() == "Dave cxx <kontakt@mailxx.dev>,\r\n"
         "  \"Tomislav @ Karastojkovic\" <qwertyuiop@gmail.com>,\r\n"
         "  mailxx <adresa@mailxx.dev>,\r\n"
         "  mailxx: <karas@mailxx.dev>,\r\n"
-        "  Tomislav Karastojkovic <kontakt@mailxx.dev>;\r\n"
+        "  Dave cxx <kontakt@mailxx.dev>;\r\n"
         "  all: <qwertyuiop@hotmail.com>,\r\n"
         "  Tomislav <qwertyuiop@gmail.com>,\r\n"
         "  \"Tomislav @ Karastojkovic\" <qwertyuiop@zoho.com>;");
-    BOOST_CHECK(msg.bcc_recipients_to_string() == "Tomislav Karastojkovic <kontakt@mailxx.dev>,\r\n"
+    BOOST_CHECK(msg.bcc_recipients_to_string() == "Dave cxx <kontakt@mailxx.dev>,\r\n"
         "  \"Tomislav @ Karastojkovic\" <qwertyuiop@gmail.com>,\r\n"
         "  mailxx <adresa@mailxx.dev>");
     BOOST_CHECK(msg.date_time() == ldt);
@@ -795,7 +795,7 @@ BOOST_AUTO_TEST_CASE(format_multipart_html_ascii_bit7_text_ascii_base64)
 {
     message msg;
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     auto ldt = make_zoned_time(2014, 1, 17, 13, 9, 22, -7, -30);
     msg.date_time(ldt);
@@ -820,7 +820,7 @@ BOOST_AUTO_TEST_CASE(format_multipart_html_ascii_bit7_text_ascii_base64)
     msg.format(msg_str);
     BOOST_CHECK(msg_str ==
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
         "MIME-Version: 1.0\r\n"
@@ -853,7 +853,7 @@ BOOST_AUTO_TEST_CASE(format_multipart_html_ascii_qp_text_ascii_bit8)
 {
     message msg;
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     auto ldt = make_zoned_time(2014, 1, 17, 13, 9, 22, -7, -30);
     msg.date_time(ldt);
@@ -878,7 +878,7 @@ BOOST_AUTO_TEST_CASE(format_multipart_html_ascii_qp_text_ascii_bit8)
     msg.format(msg_str);
     BOOST_CHECK(msg_str ==
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
         "MIME-Version: 1.0\r\n"
@@ -912,7 +912,7 @@ BOOST_AUTO_TEST_CASE(format_related_html_default_base64_text_utf8_qp)
     message msg;
     msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     auto ldt = make_zoned_time(2014, 1, 17, 13, 9, 22, -7, -30);
     msg.date_time(ldt);
@@ -930,7 +930,7 @@ BOOST_AUTO_TEST_CASE(format_related_html_default_base64_text_utf8_qp)
     m2.line_policy(codec::line_len_policy_t::RECOMMENDED);
     m2.content_type(message::media_type_t::TEXT, "plain", "utf-8");
     m2.content_transfer_encoding(mime::content_transfer_encoding_t::QUOTED_PRINTABLE);
-    m2.content("Здраво, Свете!");
+    m2.content("this is a test!");
 
     msg.add_part(m1);
     msg.add_part(m2);
@@ -939,7 +939,7 @@ BOOST_AUTO_TEST_CASE(format_related_html_default_base64_text_utf8_qp)
     msg.format(msg_str);
     BOOST_CHECK(msg_str ==
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
         "MIME-Version: 1.0\r\n"
@@ -973,7 +973,7 @@ BOOST_AUTO_TEST_CASE(format_alternative_html_ascii_bit8_text_utf8_base64)
 {
     message msg;
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     auto ldt = make_zoned_time(2014, 1, 17, 13, 9, 22, -7, -30);
     msg.date_time(ldt);
@@ -998,7 +998,7 @@ BOOST_AUTO_TEST_CASE(format_alternative_html_ascii_bit8_text_utf8_base64)
     msg.format(msg_str);
     BOOST_CHECK(msg_str ==
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
         "MIME-Version: 1.0\r\n"
@@ -1034,11 +1034,11 @@ BOOST_AUTO_TEST_CASE(format_dotted_multipart)
 {
     message msg;
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.add_recipient(mail_address("Tomislav Karastojkovic", "qwerty@gmail.com"));
-    msg.add_recipient(mail_address("Tomislav Karastojkovic", "asdfgh@zoho.com"));
-    msg.add_recipient(mail_address("Tomislav Karastojkovic", "zxcvbn@hotmail.com"));
+    msg.add_recipient(mail_address("Dave cxx", "qwerty@gmail.com"));
+    msg.add_recipient(mail_address("Dave cxx", "asdfgh@zoho.com"));
+    msg.add_recipient(mail_address("Dave cxx", "zxcvbn@hotmail.com"));
     auto ldt = make_zoned_time(2016, 3, 15, 13, 13, 32, 0, 0);
     msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
     msg.date_time(ldt);
@@ -1126,11 +1126,11 @@ BOOST_AUTO_TEST_CASE(format_dotted_multipart)
         msg.format(msg_str, {false});
         BOOST_CHECK(msg_str ==
             "From: mailxx <adresa@mailxx.dev>\r\n"
-            "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+            "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
             "To: mailxx <adresa@mailxx.dev>,\r\n"
-            "  Tomislav Karastojkovic <qwerty@gmail.com>,\r\n"
-            "  Tomislav Karastojkovic <asdfgh@zoho.com>,\r\n"
-            "  Tomislav Karastojkovic <zxcvbn@hotmail.com>\r\n"
+            "  Dave cxx <qwerty@gmail.com>,\r\n"
+            "  Dave cxx <asdfgh@zoho.com>,\r\n"
+            "  Dave cxx <zxcvbn@hotmail.com>\r\n"
             "Date: Tue, 15 Mar 2016 13:13:32 +0000\r\n"
             "MIME-Version: 1.0\r\n"
             "Content-Type: multipart/related; boundary=\"my_bound\"\r\n"
@@ -1202,11 +1202,11 @@ BOOST_AUTO_TEST_CASE(format_dotted_multipart)
 
         BOOST_CHECK(msg_str ==
             "From: mailxx <adresa@mailxx.dev>\r\n"
-            "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+            "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
             "To: mailxx <adresa@mailxx.dev>,\r\n"
-            "  Tomislav Karastojkovic <qwerty@gmail.com>,\r\n"
-            "  Tomislav Karastojkovic <asdfgh@zoho.com>,\r\n"
-            "  Tomislav Karastojkovic <zxcvbn@hotmail.com>\r\n"
+            "  Dave cxx <qwerty@gmail.com>,\r\n"
+            "  Dave cxx <asdfgh@zoho.com>,\r\n"
+            "  Dave cxx <zxcvbn@hotmail.com>\r\n"
             "Date: Tue, 15 Mar 2016 13:13:32 +0000\r\n"
             "MIME-Version: 1.0\r\n"
             "Content-Type: multipart/related; boundary=\"my_bound\"\r\n"
@@ -1288,7 +1288,7 @@ BOOST_AUTO_TEST_CASE(format_long_multipart)
 {
     message msg;
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     auto ldt = make_zoned_time(2014, 1, 17, 13, 9, 22, -7, -30);
@@ -1369,7 +1369,7 @@ BOOST_AUTO_TEST_CASE(format_long_multipart)
     msg.format(msg_str);
     BOOST_CHECK(msg_str ==
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
         "MIME-Version: 1.0\r\n"
@@ -1506,7 +1506,7 @@ BOOST_AUTO_TEST_CASE(format_parse_nested_multipart)
 {
     message msg;
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     auto ldt = make_zoned_time(2014, 1, 17, 13, 9, 22, -7, -30);
     msg.date_time(ldt);
@@ -1647,7 +1647,7 @@ BOOST_AUTO_TEST_CASE(format_attachment)
 {
     message msg;
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.subject("format attachment");
     ifstream ifs1("cv.txt");
@@ -1684,7 +1684,7 @@ BOOST_AUTO_TEST_CASE(format_utf8_attachment_b64)
     msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
     msg.date_time(ldt);
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.subject("format utf8 attachment base64");
     msg.content_type().boundary("mybnd");
@@ -1700,7 +1700,7 @@ BOOST_AUTO_TEST_CASE(format_utf8_attachment_b64)
     msg.format(msg_str);
     BOOST_CHECK(msg_str ==
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
         "MIME-Version: 1.0\r\n"
@@ -1733,7 +1733,7 @@ BOOST_AUTO_TEST_CASE(format_utf8_attachment_qp)
     msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
     msg.date_time(ldt);
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.subject("format utf8 attachment quoted printable");
     msg.content_type().boundary("mybnd");
@@ -1749,7 +1749,7 @@ BOOST_AUTO_TEST_CASE(format_utf8_attachment_qp)
     msg.format(msg_str);
     BOOST_CHECK(msg_str ==
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
         "MIME-Version: 1.0\r\n"
@@ -1781,7 +1781,7 @@ BOOST_AUTO_TEST_CASE(format_msg_att)
     auto ldt = make_zoned_time(2016, 2, 11, 22, 56, 22, 0, 0);
     msg.date_time(ldt);
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.subject("format message attachment");
     msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
@@ -1814,7 +1814,7 @@ BOOST_AUTO_TEST_CASE(format_msg_att)
 
     BOOST_CHECK(msg_str ==
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
         "MIME-Version: 1.0\r\n"
@@ -1913,7 +1913,7 @@ BOOST_AUTO_TEST_CASE(format_html_att)
     auto ldt = make_zoned_time(2016, 2, 11, 22, 56, 22, 0, 0);
     msg.date_time(ldt);
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.subject("format html attachment");
     msg.content_type(message::media_type_t::TEXT, "html", "utf-8");
@@ -1932,7 +1932,7 @@ BOOST_AUTO_TEST_CASE(format_html_att)
 
     BOOST_CHECK(msg.parts().size() == 2);
     BOOST_CHECK(msg_str == "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
         "MIME-Version: 1.0\r\n"
@@ -2875,7 +2875,7 @@ BOOST_AUTO_TEST_CASE(format_long_header)
     message msg;
     msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "kontakt@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "kontakt@mailxx.dev"));
     msg.add_recipient(mail_address("contact", "kontakt@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_group("all", {mail_address("Tomislav", "qwerty@hotmail.com")}));
@@ -2891,7 +2891,7 @@ BOOST_AUTO_TEST_CASE(format_long_header)
         "  1234567890123456789012345678901234567890123456789012345678901234567890 \r\n"
         "  12345678901234567890@mailxx.dev\r\n"
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <kontakt@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <kontakt@mailxx.dev>\r\n"
         "To: contact <kontakt@mailxx.dev>,\r\n"
         "  mailxx <adresa@mailxx.dev>,\r\n"
         "  all: Tomislav <qwerty@hotmail.com>;\r\n"
@@ -2907,7 +2907,7 @@ BOOST_AUTO_TEST_CASE(format_long_header)
     BOOST_CHECK(msg_str == "Proba: 12345678901234567890123456789012345678901234567890123456789012345678901\r\n"
         "  2345678901234567890 12345678901234567890@mailxx.dev\r\n"
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <kontakt@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <kontakt@mailxx.dev>\r\n"
         "To: contact <kontakt@mailxx.dev>,\r\n"
         "  mailxx <adresa@mailxx.dev>,\r\n"
         "  all: Tomislav <qwerty@hotmail.com>;\r\n"
@@ -3210,7 +3210,7 @@ BOOST_AUTO_TEST_CASE(parse_addresses)
         "  all, \r\n"
         "  mail io <adresa@mailxx.dev>\r\n"
         "Cc: all: Tomislav <qwerty@mailxx.dev>, \r\n"
-        "  \"Tomislav Karastojkovic\" <asdfgh@mailxx.dev>; \r\n"
+        "  \"Dave cxx\" <asdfgh@mailxx.dev>; \r\n"
         "  adresa@mailxx.dev,\r\n"
         "  undisclosed-recipients:;\r\n"
         "  qwerty@gmail.com,\r\n"
@@ -3348,10 +3348,10 @@ Parsing oversized recipients with the recommended line policy.
 BOOST_AUTO_TEST_CASE(parse_recommended_address)
 {
     string msg_str = "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <kontakt@mailxx.dev>\r\n"
-        "To: contact <kontakt@mailxx.dev>, Tomislav Karastojkovic <karas@mailxx.dev>, Tomislav Karastojkovic <qwerty@gmail.com>, "
-        "  Tomislav Karastojkovic <asdfg@zoho.com>\r\n"
-        "Cc: mail.io <adresa@mailxx.dev>, Tomislav Karastojkovic <zxcvb@yahoo.com>\r\n"
+        "Reply-To: Dave cxx <kontakt@mailxx.dev>\r\n"
+        "To: contact <kontakt@mailxx.dev>, Dave cxx <karas@mailxx.dev>, Dave cxx <qwerty@gmail.com>, "
+        "  Dave cxx <asdfg@zoho.com>\r\n"
+        "Cc: mail.io <adresa@mailxx.dev>, Dave cxx <zxcvb@yahoo.com>\r\n"
         "Date: Wed, 23 Aug 2017 22:16:45 +0000\r\n"
         "Subject: parse recommended address\r\n"
         "\r\n"
@@ -3897,7 +3897,7 @@ Except the trailing ones, CRLF characters are preserved.
 BOOST_AUTO_TEST_CASE(parse_long_text_default_default)
 {
     string msg_str = "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>, <qwerty@gmail.com>\r\n"
         "Date: Fri, 12 Feb 2016 13:22:22 +0100\r\n"
         "Content-Type: text/plain\r\n"
@@ -4302,7 +4302,7 @@ BOOST_AUTO_TEST_CASE(parse_multipart_html_ascii_qp_plain_ascii_bit8)
     msg.line_policy(codec::line_len_policy_t::MANDATORY);
 
     string msg_str = "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
         "MIME-Version: 1.0\r\n"
@@ -4350,7 +4350,7 @@ BOOST_AUTO_TEST_CASE(parse_multipart_html_default_base64_text_utf8_qp)
     msg.line_policy(codec::line_len_policy_t::MANDATORY);
 
     string msg_str = "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
         "MIME-Version: 1.0\r\n"
@@ -4398,7 +4398,7 @@ BOOST_AUTO_TEST_CASE(parse_multipart_html_ascii_base64_plain_ascii_bit7)
     msg.line_policy(codec::line_len_policy_t::MANDATORY);
 
     string msg_str = "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>, <qwerty@gmail.com>\r\n"
         "Date: Fri, 12 Feb 2016 13:22:22 +0100\r\n"
         "MIME-Version: 1.0\r\n"
@@ -4445,8 +4445,8 @@ BOOST_AUTO_TEST_CASE(parse_dotted_multipart_no_esc)
     msg.line_policy(codec::line_len_policy_t::MANDATORY);
     string msg_str =
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
-        "To: mailxx <adresa@mailxx.dev>, Tomislav Karastojkovic <qwerty@gmail.com>, Tomislav Karastojkovic <asdfgh@zoho.com>, Tomislav Karastojkovic <zxcvbn@hotmail.com>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
+        "To: mailxx <adresa@mailxx.dev>, Dave cxx <qwerty@gmail.com>, Dave cxx <asdfgh@zoho.com>, Dave cxx <zxcvbn@hotmail.com>\r\n"
         "Date: Tue, 15 Mar 2016 13:13:32 +0000\r\n"
         "MIME-Version: 1.0\r\n"
         "Content-Type: multipart/related; boundary=\"my_bound\"\r\n"
@@ -4588,8 +4588,8 @@ BOOST_AUTO_TEST_CASE(parse_dotted_multipart_esc)
     msg.line_policy(codec::line_len_policy_t::MANDATORY);
     string msg_str =
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
-        "To: mailxx <adresa@mailxx.dev>, Tomislav Karastojkovic <qwerty@gmail.com>, Tomislav Karastojkovic <asdfgh@zoho.com>, Tomislav Karastojkovic <zxcvbn@hotmail.com>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
+        "To: mailxx <adresa@mailxx.dev>, Dave cxx <qwerty@gmail.com>, Dave cxx <asdfgh@zoho.com>, Dave cxx <zxcvbn@hotmail.com>\r\n"
         "Date: Tue, 15 Mar 2016 13:13:32 +0000\r\n"
         "MIME-Version: 1.0\r\n"
         "Content-Type: multipart/related; boundary=\"my_bound\"\r\n"
@@ -4735,7 +4735,7 @@ BOOST_AUTO_TEST_CASE(parse_long_multipart)
     msg.line_policy(codec::line_len_policy_t::MANDATORY);
     string msg_str =
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
         "MIME-Version: 1.0\r\n"
@@ -4932,8 +4932,8 @@ BOOST_AUTO_TEST_CASE(parse_multipart_content)
     message msg;
     msg.line_policy(codec::line_len_policy_t::MANDATORY);
     string msg_str = "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
-        "To: mailxx <adresa@mailxx.dev>, <qwerty@gmail.com>, Tomislav Karastojkovic <asdfgh@outlook.com>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
+        "To: mailxx <adresa@mailxx.dev>, <qwerty@gmail.com>, Dave cxx <asdfgh@outlook.com>\r\n"
         "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
         "MIME-Version: 1.0\r\n"
         "Content-Type: multipart/alternative; boundary=\"my_bound\"\r\n"
@@ -4986,7 +4986,7 @@ BOOST_AUTO_TEST_CASE(parse_attachment)
 {
     message msg;
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.subject("parse attachment");
     ifstream ifs1("cv.txt");
@@ -5043,7 +5043,7 @@ BOOST_AUTO_TEST_CASE(parse_html_attachment)
     auto ldt = make_zoned_time(2016, 2, 11, 22, 56, 22, 0, 0);
     msg.date_time(ldt);
     msg.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg.reply_address(mail_address("Tomislav Karastojkovic", "adresa@mailxx.dev"));
+    msg.reply_address(mail_address("Dave cxx", "adresa@mailxx.dev"));
     msg.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg.subject("parse html attachment");
     msg.content_type(message::media_type_t::TEXT, "html", "utf-8");
@@ -5088,7 +5088,7 @@ BOOST_AUTO_TEST_CASE(parse_attachment_utf8)
 {
     string msg_str =
         "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <adresa@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <adresa@mailxx.dev>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
         "MIME-Version: 1.0\r\n"
@@ -5132,13 +5132,13 @@ Parsing a message with the recipents and CC recipients in several lines.
 BOOST_AUTO_TEST_CASE(parse_multilined_addresses)
 {
     string msg_str = "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <kontakt@mailxx.dev>\r\n"
+        "Reply-To: Dave cxx <kontakt@mailxx.dev>\r\n"
         "To: contact <kontakt@mailxx.dev>,\r\n"
-        "  Tomislav Karastojkovic <adresa@mailxx.dev>,\r\n"
-        "  Tomislav Karastojkovic <qwerty@gmail.com>,\r\n"
-        "  Tomislav Karastojkovic <asdfg@zoho.com>,\r\n"
+        "  Dave cxx <adresa@mailxx.dev>,\r\n"
+        "  Dave cxx <qwerty@gmail.com>,\r\n"
+        "  Dave cxx <asdfg@zoho.com>,\r\n"
         "Cc: mail.io <adresa@mailxx.dev>,\r\n"
-        "  Tomislav Karastojkovic <zxcvb@yahoo.com>\r\n"
+        "  Dave cxx <zxcvb@yahoo.com>\r\n"
         "Date: Wed, 23 Aug 2017 22:16:45 +0000\r\n"
         "Subject: Hello, World!\r\n"
         "\r\n"
@@ -5150,11 +5150,11 @@ BOOST_AUTO_TEST_CASE(parse_multilined_addresses)
 
     BOOST_CHECK(msg.from().addresses.at(0).name == "mailxx" && msg.from().addresses.at(0).address == "adresa@mailxx.dev" &&
         msg.recipients().addresses.at(0).name == "contact" && msg.recipients().addresses.at(0).address == "kontakt@mailxx.dev" &&
-        msg.recipients().addresses.at(1).name == "Tomislav Karastojkovic" && msg.recipients().addresses.at(1).address == "adresa@mailxx.dev" &&
-        msg.recipients().addresses.at(2).name == "Tomislav Karastojkovic" && msg.recipients().addresses.at(2).address == "qwerty@gmail.com" &&
-        msg.recipients().addresses.at(3).name == "Tomislav Karastojkovic" && msg.recipients().addresses.at(3).address == "asdfg@zoho.com" &&
+        msg.recipients().addresses.at(1).name == "Dave cxx" && msg.recipients().addresses.at(1).address == "adresa@mailxx.dev" &&
+        msg.recipients().addresses.at(2).name == "Dave cxx" && msg.recipients().addresses.at(2).address == "qwerty@gmail.com" &&
+        msg.recipients().addresses.at(3).name == "Dave cxx" && msg.recipients().addresses.at(3).address == "asdfg@zoho.com" &&
         msg.cc_recipients().addresses.at(0).name == "mail.io" && msg.cc_recipients().addresses.at(0).address == "adresa@mailxx.dev" &&
-        msg.cc_recipients().addresses.at(1).name == "Tomislav Karastojkovic" && msg.cc_recipients().addresses.at(1).address == "zxcvb@yahoo.com");
+        msg.cc_recipients().addresses.at(1).name == "Dave cxx" && msg.cc_recipients().addresses.at(1).address == "zxcvb@yahoo.com");
 }
 
 
@@ -5167,10 +5167,10 @@ Parsing a message with the recipients in a long line.
 BOOST_AUTO_TEST_CASE(parse_long_addresses)
 {
     string msg_str = "From: mailxx <adresa@mailxx.dev>\r\n"
-        "Reply-To: Tomislav Karastojkovic <kontakt@mailxx.dev>\r\n"
-        "To: contact <kontakt@mailxx.dev>, Tomislav Karastojkovic <adresa@mailxx.dev>, Tomislav Karastojkovic <qwerty@gmail.com>, "
-        "  Tomislav Karastojkovic <asdfg@zoho.com>\r\n"
-        "Cc: mail.io <adresa@mailxx.dev>, Tomislav Karastojkovic <zxcvb@yahoo.com>\r\n"
+        "Reply-To: Dave cxx <kontakt@mailxx.dev>\r\n"
+        "To: contact <kontakt@mailxx.dev>, Dave cxx <adresa@mailxx.dev>, Dave cxx <qwerty@gmail.com>, "
+        "  Dave cxx <asdfg@zoho.com>\r\n"
+        "Cc: mail.io <adresa@mailxx.dev>, Dave cxx <zxcvb@yahoo.com>\r\n"
         "Date: Wed, 23 Aug 2017 22:16:45 +0000\r\n"
         "Subject: Hello, World!\r\n"
         "\r\n"
@@ -5181,11 +5181,11 @@ BOOST_AUTO_TEST_CASE(parse_long_addresses)
     msg.parse(msg_str);
     BOOST_CHECK(msg.from().addresses.at(0).name == "mailxx" && msg.from().addresses.at(0).address == "adresa@mailxx.dev" &&
         msg.recipients().addresses.at(0).name == "contact" && msg.recipients().addresses.at(0).address == "kontakt@mailxx.dev" &&
-        msg.recipients().addresses.at(1).name == "Tomislav Karastojkovic" && msg.recipients().addresses.at(1).address == "adresa@mailxx.dev" &&
-        msg.recipients().addresses.at(2).name == "Tomislav Karastojkovic" && msg.recipients().addresses.at(2).address == "qwerty@gmail.com" &&
-        msg.recipients().addresses.at(3).name == "Tomislav Karastojkovic" && msg.recipients().addresses.at(3).address == "asdfg@zoho.com" &&
+        msg.recipients().addresses.at(1).name == "Dave cxx" && msg.recipients().addresses.at(1).address == "adresa@mailxx.dev" &&
+        msg.recipients().addresses.at(2).name == "Dave cxx" && msg.recipients().addresses.at(2).address == "qwerty@gmail.com" &&
+        msg.recipients().addresses.at(3).name == "Dave cxx" && msg.recipients().addresses.at(3).address == "asdfg@zoho.com" &&
         msg.cc_recipients().addresses.at(0).name == "mail.io" && msg.cc_recipients().addresses.at(0).address == "adresa@mailxx.dev" &&
-        msg.cc_recipients().addresses.at(1).name == "Tomislav Karastojkovic" && msg.cc_recipients().addresses.at(1).address == "zxcvb@yahoo.com");
+        msg.cc_recipients().addresses.at(1).name == "Dave cxx" && msg.cc_recipients().addresses.at(1).address == "zxcvb@yahoo.com");
 }
 
 
@@ -5360,7 +5360,7 @@ Parsing a subject and checking the result against `string_t`.
 **/
 BOOST_AUTO_TEST_CASE(parse_qq_utf8_emoji_subject_raw)
 {
-    string msg_str = "From: \"Tomislav Karastojkovic\" <qwerty@gmail.com>\r\n"
+    string msg_str = "From: \"Dave cxx\" <qwerty@gmail.com>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Subject: =?utf-8?Q?=F0=9F=8E=81=C5=BDivi=20godinu=20dana=20na=20ra=C4=8Dun=20Super=20Kartice?=\r\n"
         "Date: Fri, 24 Dec 2021 15:15:38 +0000\r\n"
@@ -5580,7 +5580,7 @@ Parsing a UTF8 subject in the eight bit encoding.
 **/
 BOOST_AUTO_TEST_CASE(parse_utf8_subject)
 {
-    string msg_str = "From: \"Tomislav Karastojkovic\" <qwerty@gmail.com>\r\n"
+    string msg_str = "From: \"Dave cxx\" <qwerty@gmail.com>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Subject: Здраво, Свете!\r\n"
         "Date: Fri, 24 Dec 2021 15:15:38 +0000\r\n"
@@ -5628,7 +5628,7 @@ Parsing a UTF8 recipient with the quoted name in the eight bit encoding.
 **/
 BOOST_AUTO_TEST_CASE(parse_utf8_name)
 {
-    string msg_str = "From: Tomislav Karastojkovic <qwerty@gmail.com>\r\n"
+    string msg_str = "From: Dave cxx <qwerty@gmail.com>\r\n"
         "To: \"Tomislav Karastojković\" <qwerty@gmail.com>\r\n"
         "Subject: Здраво, Свете!\r\n"
         "Date: Fri, 24 Dec 2021 15:15:38 +0000\r\n"
@@ -5653,7 +5653,7 @@ Parsing UTF8 sender with the address in the eight bit encoding.
 **/
 BOOST_AUTO_TEST_CASE(parse_utf8_address)
 {
-    string msg_str = "From: Tomislav Karastojkovic <karastojković@gmail.com>\r\n"
+    string msg_str = "From: Dave cxx <karastojković@gmail.com>\r\n"
         "To: mailxx <adresa@mailxx.dev>\r\n"
         "Subject: Proba za UTF8\r\n"
         "Date: Fri, 24 Dec 2021 15:15:38 +0000\r\n"
@@ -5665,8 +5665,8 @@ BOOST_AUTO_TEST_CASE(parse_utf8_address)
     message msg;
     msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
     msg.parse(msg_str);
-    BOOST_CHECK(msg.from().addresses.at(0).name == "Tomislav Karastojkovic" && msg.from().addresses.at(0).address == "karastojković@gmail.com");
-    BOOST_CHECK(msg.from_to_string() == "Tomislav Karastojkovic <karastojković@gmail.com>" && msg.content() == "Здраво, Свете!\r\n");
+    BOOST_CHECK(msg.from().addresses.at(0).name == "Dave cxx" && msg.from().addresses.at(0).address == "karastojković@gmail.com");
+    BOOST_CHECK(msg.from_to_string() == "Dave cxx <karastojković@gmail.com>" && msg.content() == "Здраво, Свете!\r\n");
 }
 
 
@@ -6079,17 +6079,17 @@ BOOST_AUTO_TEST_CASE(object_copying)
 {
     message msg1;
     msg1.from(mail_address("mailxx", "adresa@mailxx.dev"));
-    msg1.reply_address(mail_address("Tomislav Karastojkovic", "kontakt@mailxx.dev"));
+    msg1.reply_address(mail_address("Dave cxx", "kontakt@mailxx.dev"));
     msg1.add_recipient(mail_address("kontakt", "kontakt@mailxx.dev"));
     msg1.add_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg1.add_recipient(mail_group("all", {mail_address("Tomislav", "qwerty@hotmail.com")}));
-    msg1.add_cc_recipient(mail_group("mailxx", {mail_address("", "karas@mailxx.dev"), mail_address("Tomislav Karastojkovic", "kontakt@mailxx.dev")}));
-    msg1.add_cc_recipient(mail_address("Tomislav Karastojkovic", "kontakt@mailxx.dev"));
+    msg1.add_cc_recipient(mail_group("mailxx", {mail_address("", "karas@mailxx.dev"), mail_address("Dave cxx", "kontakt@mailxx.dev")}));
+    msg1.add_cc_recipient(mail_address("Dave cxx", "kontakt@mailxx.dev"));
     msg1.add_cc_recipient(mail_address("Tomislav @ Karastojkovic", "asdfg@gmail.com"));
     msg1.add_cc_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg1.add_cc_recipient(mail_group("all", {mail_address("", "qwerty@hotmail.com"), mail_address("Tomislav", "asdfg@gmail.com"),
         mail_address("Tomislav @ Karastojkovic", "zxcvb@zoho.com")}));
-    msg1.add_bcc_recipient(mail_address("Tomislav Karastojkovic", "kontakt@mailxx.dev"));
+    msg1.add_bcc_recipient(mail_address("Dave cxx", "kontakt@mailxx.dev"));
     msg1.add_bcc_recipient(mail_address("Tomislav @ Karastojkovic", "asdfg@gmail.com"));
     msg1.add_bcc_recipient(mail_address("mailxx", "adresa@mailxx.dev"));
     msg1.subject("Hello, World!");
