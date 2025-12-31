@@ -20,6 +20,7 @@ Helpers to bridge exception-based code into mailxx::result.
 #include <utility>
 
 #include <mailxx/detail/asio_decl.hpp>
+#include <mailxx/detail/awaitable_traits.hpp>
 #include <mailxx/detail/result.hpp>
 #include <mailxx/imap/error.hpp>
 #include <mailxx/net/dialog.hpp>
@@ -35,7 +36,7 @@ namespace mailxx
     std::source_location where = std::source_location::current())
 {
     if (!eptr)
-        return make_error(fallback, "unknown exception", {}, {}, where);
+        return make_error(fallback, "unknown exception", std::string{}, {}, where);
 
     try
     {
@@ -59,15 +60,15 @@ namespace mailxx
     }
     catch (const std::system_error& exc)
     {
-        return make_error(fallback, exc.what(), {}, exc.code(), where);
+        return make_error(fallback, exc.what(), std::string{}, exc.code(), where);
     }
     catch (const std::exception& exc)
     {
-        return make_error(fallback, exc.what(), {}, {}, where);
+        return make_error(fallback, exc.what(), std::string{}, {}, where);
     }
     catch (...)
     {
-        return make_error(fallback, "unknown exception", {}, {}, where);
+        return make_error(fallback, "unknown exception", std::string{}, {}, where);
     }
 }
 
@@ -92,21 +93,6 @@ template<class F>
         return detail::make_unexpected(from_exception(std::current_exception(), fallback, std::source_location::current()));
     }
 }
-
-namespace detail
-{
-template<class>
-struct awaitable_value;
-
-template<class T, class Executor>
-struct awaitable_value<mailxx::asio::awaitable<T, Executor>>
-{
-    using type = T;
-};
-
-template<class T>
-using awaitable_value_t = typename awaitable_value<std::remove_cvref_t<T>>::type;
-} // namespace detail
 
 template<class F>
 [[nodiscard]] auto protect_awaitable(F&& f, errc fallback)

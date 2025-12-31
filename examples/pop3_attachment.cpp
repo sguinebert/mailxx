@@ -24,6 +24,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <boost/asio/detached.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include "example_util.hpp"
 #include <mailxx/mime/message.hpp>
 #include <mailxx/net/tls_mode.hpp>
 #include <mailxx/pop3/client.hpp>
@@ -63,7 +64,13 @@ int main()
                 // modify to use real account
                 co_await conn.login("mailxx@mailserver.com", "mailxxpass");
 
-                std::string raw = co_await conn.retr(1);
+                auto retr_res = co_await conn.retr(1);
+                if (!retr_res)
+                {
+                    print_error(retr_res.error());
+                    co_return;
+                }
+                std::string raw = retr_res.value();
                 message msg;
                 msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
                 msg.parse(raw);

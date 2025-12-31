@@ -83,7 +83,7 @@ public:
         , pool_(other.pool_)
         , valid_(other.valid_)
     {
-        other.pool_ = nullptr;
+        other.pool_.reset();
         other.valid_ = false;
     }
     
@@ -96,7 +96,7 @@ public:
             metadata_ = std::move(other.metadata_);
             pool_ = other.pool_;
             valid_ = other.valid_;
-            other.pool_ = nullptr;
+            other.pool_.reset();
             other.valid_ = false;
         }
         return *this;
@@ -517,7 +517,7 @@ private:
 
             auto res = co_await (std::move(timer_wait) || std::move(recv_wait));
 
-            if (std::holds_alternative<std::tuple<mailxx::asio::error_code>>(res))
+            if (res.index() == 0)
             {
                 // Timer finished first
                 std::lock_guard lock(stats_mutex_);
@@ -526,10 +526,10 @@ private:
             }
             else
             {
-                auto [ec, /*msg*/] = std::get<1>(res);
+                auto [ec] = std::get<1>(res);
                 if (ec)
                 {
-                    if (ec == mailxx::asio::error::operation_aborted)
+                    if (ec == mailxx::asio::error::make_error_code(mailxx::asio::error::operation_aborted))
                         continue;
                     if (shutdown_.load(std::memory_order_acquire))
                         throw pool_error("Pool is shutting down");
@@ -554,17 +554,17 @@ private:
             catch (...)
             {
                 last_error = std::current_exception();
-                ++attempts;
-                
-                if (attempts < config_.creation_retry_count)
-                {
-                    MAILXX_LOG_DEBUG("POOL", "Connection creation failed, retry " 
-                        << attempts << "/" << config_.creation_retry_count);
-                    
-                    steady_timer timer(executor_);
-                    timer.expires_after(config_.creation_retry_delay);
-                    co_await timer.async_wait(use_awaitable);
-                }
+            }
+
+            ++attempts;
+            if (attempts < config_.creation_retry_count)
+            {
+                MAILXX_LOG_DEBUG("POOL", "Connection creation failed, retry "
+                    << attempts << "/" << config_.creation_retry_count);
+
+                steady_timer timer(executor_);
+                timer.expires_after(config_.creation_retry_delay);
+                co_await timer.async_wait(use_awaitable);
             }
         }
         

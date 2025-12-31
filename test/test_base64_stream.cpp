@@ -15,11 +15,32 @@ Validate streaming Base64 encoding matches existing encoder output and wrapping.
 #include <mailxx/detail/output_sink.hpp>
 #include <vector>
 #include <string>
+#include <algorithm>
+#include <string_view>
 
 using namespace mailxx;
 
 namespace
 {
+std::string join_lines(const std::vector<std::string>& lines, std::string_view eol)
+{
+    if (lines.empty())
+        return {};
+    std::size_t total = 0;
+    for (const auto& line : lines)
+        total += line.size();
+    total += eol.size() * (lines.size() - 1);
+    std::string out;
+    out.reserve(total);
+    for (std::size_t i = 0; i < lines.size(); ++i)
+    {
+        if (i != 0)
+            out.append(eol);
+        out.append(lines[i]);
+    }
+    return out;
+}
+
 std::string encode_streaming(std::string_view input, std::size_t line_policy = 76)
 {
     base64_stream_encoder enc(line_policy);
@@ -54,8 +75,8 @@ BOOST_AUTO_TEST_CASE(stream_matches_classic_encoder)
 
     base64 codec(76, 76);
     auto expected_res = codec.encode(input);
-    BOOST_REQUIRE(expected_res);
-    const std::string expected = *expected_res;
+    BOOST_REQUIRE(!expected_res.empty());
+    const std::string expected = join_lines(expected_res, codec::END_OF_LINE);
     const std::string streamed = encode_streaming(input, 76);
 
     BOOST_TEST(streamed == expected);
@@ -66,8 +87,8 @@ BOOST_AUTO_TEST_CASE(stream_handles_short_inputs)
     const std::string input = "pad";
     base64 codec(76, 76);
     auto expected_res = codec.encode(input);
-    BOOST_REQUIRE(expected_res);
-    const std::string expected = *expected_res;
+    BOOST_REQUIRE(!expected_res.empty());
+    const std::string expected = join_lines(expected_res, codec::END_OF_LINE);
     const std::string streamed = encode_streaming(input, 76);
     BOOST_TEST(streamed == expected);
 }

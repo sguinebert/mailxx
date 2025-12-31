@@ -1,5 +1,8 @@
 #pragma once
 
+#ifndef MAILXX_DETAIL_ASCII_HPP
+#define MAILXX_DETAIL_ASCII_HPP
+
 #include <string>
 #include <string_view>
 #include <cctype>
@@ -236,3 +239,5 @@ namespace detail
     }
 }
 }
+
+#endif // MAILXX_DETAIL_ASCII_HPP

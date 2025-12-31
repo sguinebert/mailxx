@@ -18,11 +18,14 @@ No exceptions are thrown in mailxx - all errors are returned via result<T>.
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <ostream>
 #include <system_error>
 #include <source_location>
 #include <tuple>
 #include <type_traits>
 #include <utility>
+
+#include <mailxx/detail/error_detail.hpp>
 
 #if defined(__has_include)
 #if __has_include(<expected>)
@@ -85,55 +88,6 @@ template<class Exp, class F>
         return std::forward<Exp>(exp).transform_error(std::forward<F>(f));
     return std::forward<Exp>(exp).map_error(std::forward<F>(f));
 }
-
-class error_detail
-{
-public:
-    error_detail& add(std::string_view key, std::string_view value)
-    {
-        if (!detail_.empty())
-            detail_.push_back('\n');
-        detail_.append(key.data(), key.size());
-        detail_.push_back('=');
-        detail_.append(value.data(), value.size());
-        return *this;
-    }
-
-    error_detail& add(std::string_view key, const char* value)
-    {
-        return add(key, value ? std::string_view(value) : std::string_view{});
-    }
-
-    error_detail& add(std::string_view key, bool value)
-    {
-        return add(key, value ? "true" : "false");
-    }
-
-    template<typename T, typename std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>, int> = 0>
-    error_detail& add(std::string_view key, T value)
-    {
-        return add(key, std::to_string(value));
-    }
-
-    template<typename T, typename std::enable_if_t<std::is_floating_point_v<T>, int> = 0>
-    error_detail& add(std::string_view key, T value)
-    {
-        return add(key, std::to_string(value));
-    }
-
-    template<typename T, typename std::enable_if_t<std::is_enum_v<T>, int> = 0>
-    error_detail& add(std::string_view key, T value)
-    {
-        return add(key, std::to_string(static_cast<std::underlying_type_t<T>>(value)));
-    }
-
-    [[nodiscard]] bool empty() const noexcept { return detail_.empty(); }
-    [[nodiscard]] std::string str() const & { return detail_; }
-    [[nodiscard]] std::string str() && { return std::move(detail_); }
-
-private:
-    std::string detail_;
-};
 
 } // namespace detail
 
@@ -217,6 +171,11 @@ enum class errc : std::uint32_t
         case errc::mime_parse_error: return "mime_parse_error";
     }
     return "unknown";
+}
+
+inline std::ostream& operator<<(std::ostream& os, errc code)
+{
+    return os << to_string(code);
 }
 
 /// Rich error type with code, message, and optional details.
@@ -446,6 +405,15 @@ template<typename F>
         auto&& _result = co_await (expr); \
         if (!_result) [[unlikely]] \
             co_return ::mailxx::detail::make_unexpected(std::move(_result).error()); \
+    } while (0)
+
+/// Assign value from result in coroutine and propagate errors
+#define MAILXX_CO_TRY_ASSIGN(lhs, expr) \
+    do { \
+        auto&& _result = (expr); \
+        if (!_result) [[unlikely]] \
+            co_return ::mailxx::detail::make_unexpected(std::move(_result).error()); \
+        (lhs) = std::move(*_result); \
     } while (0)
 
 // ==================== Coroutine Helpers ====================

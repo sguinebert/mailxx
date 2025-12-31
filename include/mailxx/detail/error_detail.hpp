@@ -12,6 +12,9 @@ Each entry is formatted as key=value\n to ease parsing and redaction.
 
 #pragma once
 
+#ifndef MAILXX_DETAIL_ERROR_DETAIL_HPP
+#define MAILXX_DETAIL_ERROR_DETAIL_HPP
+
 #include <charconv>
 #include <cstdint>
 #include <string>
@@ -116,3 +119,5 @@ private:
 };
 
 } // namespace mailxx::detail
+
+#endif // MAILXX_DETAIL_ERROR_DETAIL_HPP

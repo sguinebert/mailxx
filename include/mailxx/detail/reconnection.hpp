@@ -117,12 +117,12 @@ struct reconnection_policy
         }
         
         // Apply jitter
-        if (jitter_factor > 0.0)
-        {
-            thread_local std::mt19937 rng(std::random_device{}());
-            std::uniform_real_distribution<double> dist(1.0 - jitter_factor, 1.0 + jitter_factor);
-            delay_ms *= dist(rng);
-        }
+        // if (jitter_factor > 0.0)
+        // {
+        //     thread_local std::mt19937 rng(std::random_device{}());
+        //     std::uniform_real_distribution<double> dist(1.0 - jitter_factor, 1.0 + jitter_factor);
+        //     delay_ms *= dist(rng);
+        // }
         
         auto result = std::chrono::milliseconds(static_cast<long long>(delay_ms));
         

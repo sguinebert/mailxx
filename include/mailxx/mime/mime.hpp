@@ -488,7 +488,7 @@ public:
 
     @return Optional attachment source.
     **/
-    const std::optional<attachment_source>& attachment_source() const;
+    const std::optional<mailxx::attachment_source>& attachment_source() const;
 
     /**
     Adding a mime part.
@@ -1007,7 +1007,7 @@ protected:
     /**
     Optional attachment source (file-backed or in-memory) used for streaming output.
     **/
-    std::optional<attachment_source> attachment_source_;
+    std::optional<mailxx::attachment_source> attachment_source_;
 
     /**
     Keeps containing mime parts, if any; otherwise, it's empty vector.
@@ -1077,6 +1077,11 @@ protected:
     std::string details_;
 };
 
+inline std::string mime_error::details() const
+{
+    return details_;
+}
+
 // ------------------------------------------------------------
 // Header-only helpers for streaming output
 // ------------------------------------------------------------
@@ -1089,7 +1094,7 @@ inline void mime::attachment_source(const mailxx::attachment_source& src)
         content_.clear();
 }
 
-inline const std::optional<attachment_source>& mime::attachment_source() const
+inline const std::optional<mailxx::attachment_source>& mime::attachment_source() const
 {
     return attachment_source_;
 }
@@ -1195,6 +1200,8 @@ inline void mime::format_to(detail::output_sink& sink, bool dot_escape) const
 
 
 } // namespace mailxx
+
+#include <mailxx/mime/mime_impl.hpp>
 
 
 #ifdef _MSC_VER

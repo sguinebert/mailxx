@@ -38,6 +38,8 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <filesystem>
 
 
+#include <mailxx/codec/bit7.hpp>
+#include <mailxx/codec/bit8.hpp>
 #include <mailxx/codec/q_codec.hpp>
 #include <mailxx/mime/mime.hpp>
 #include <mailxx/mime/mailboxes.hpp>
@@ -681,77 +683,77 @@ protected:
     /**
     Printable ASCII characters without the alphanumerics, double quote, comma, colon, semicolon, angle and square brackets and monkey.
     **/
-    static const std::string ATEXT;
+    inline static constexpr std::string_view ATEXT = "!#$%&'*+-./=?^_`{|}~";
 
     /**
     Printable ASCII characters without the alphanumerics, brackets and backslash.
     **/
-    static const std::string DTEXT;
+    inline static constexpr std::string_view DTEXT = "!#$%&'*+-.@/=?^_`{|}~";
 
     /**
     `From` header name.
     **/
-    static const std::string FROM_HEADER;
+    inline static constexpr std::string_view FROM_HEADER = "From";
 
     /**
     `Sender` header name.
     **/
-    static const std::string SENDER_HEADER;
+    inline static constexpr std::string_view SENDER_HEADER = "Sender";
 
     /**
     `Reply-To` header name.
     **/
-    static const std::string REPLY_TO_HEADER;
+    inline static constexpr std::string_view REPLY_TO_HEADER = "Reply-To";
 
     /**
     `To` header name.
     **/
-    static const std::string TO_HEADER;
+    inline static constexpr std::string_view TO_HEADER = "To";
 
     /**
     `Cc` header name.
     **/
-    static const std::string CC_HEADER;
+    inline static constexpr std::string_view CC_HEADER = "Cc";
 
     /**
     `Bcc` header name.
     **/
-    static const std::string BCC_HEADER;
+    inline static constexpr std::string_view BCC_HEADER = "Bcc";
 
     /**
     `Message-ID` header name.
     **/
-    static const std::string MESSAGE_ID_HEADER;
+    inline static constexpr std::string_view MESSAGE_ID_HEADER = "Message-ID";
 
     /**
     `In-Reply-To` header name.
     **/
-    static const std::string IN_REPLY_TO_HEADER;
+    inline static constexpr std::string_view IN_REPLY_TO_HEADER = "In-Reply-To";
 
     /**
     `References` header name.
     **/
-    static const std::string REFERENCES_HEADER;
+    inline static constexpr std::string_view REFERENCES_HEADER = "References";
 
     /**
     Subject header name.
     **/
-    static const std::string SUBJECT_HEADER;
+    inline static constexpr std::string_view SUBJECT_HEADER = "Subject";
 
     /**
     Date header name.
     **/
-    static const std::string DATE_HEADER;
+    inline static constexpr std::string_view DATE_HEADER = "Date";
 
     /**
     Disposition notification header name.
     **/
-    static const std::string DISPOSITION_NOTIFICATION_HEADER;
+    inline static constexpr std::string_view DISPOSITION_NOTIFICATION_HEADER = "Disposition-Notification-To";
 
     /**
     Mime version header name.
     **/
-    static const std::string MIME_VERSION_HEADER;
+    inline static constexpr std::string_view MIME_VERSION_HEADER = "MIME-Version";
 
     /**
     Formatting the header to a string.
@@ -963,21 +965,6 @@ typedef mime_error message_error;
 // ------------------------------------------------------------
 // Header-only implementation (C++23)
 // ------------------------------------------------------------
-inline const std::string message::ATEXT{"!#$%&'*+-./=?^_`{|}~"};
-inline const std::string message::DTEXT{"!#$%&'*+-.@/=?^_`{|}~"}; // atext with monkey
-inline const std::string message::FROM_HEADER{"From"};
-inline const std::string message::SENDER_HEADER{"Sender"};
-inline const std::string message::REPLY_TO_HEADER{"Reply-To"};
-inline const std::string message::TO_HEADER{"To"};
-inline const std::string message::CC_HEADER{"Cc"};
-inline const std::string message::BCC_HEADER{"Bcc"};
-inline const std::string message::MESSAGE_ID_HEADER{"Message-ID"};
-inline const std::string message::IN_REPLY_TO_HEADER{"In-Reply-To"};
-inline const std::string message::REFERENCES_HEADER{"References"};
-inline const std::string message::SUBJECT_HEADER{"Subject"};
-inline const std::string message::DATE_HEADER{"Date"};
-inline const std::string message::DISPOSITION_NOTIFICATION_HEADER{"Disposition-Notification-To"};
-inline const std::string message::MIME_VERSION_HEADER{"MIME-Version"};
 
 
 inline message::message() : mime(), date_time_(std::chrono::current_zone(), 
@@ -1202,7 +1189,7 @@ std::string inline message::from_to_string() const
 
 result<std::string> inline message::from_to_string_result() const
 {
-    return format_address_list(from_, FROM_HEADER);
+    return format_address_list(from_, std::string(FROM_HEADER));
 }
 
 
@@ -1227,7 +1214,7 @@ std::string inline message::sender_to_string() const
 
 result<std::string> inline message::sender_to_string_result() const
 {
-    return format_address(sender_.name, sender_.address, SENDER_HEADER + HEADER_SEPARATOR_STR);
+    return format_address(sender_.name, sender_.address, std::string(SENDER_HEADER) + HEADER_SEPARATOR_STR);
 }
 
 void inline message::reply_address(const mail_address& mail)
@@ -1251,7 +1238,7 @@ std::string inline message::reply_address_to_string() const
 
 result<std::string> inline message::reply_address_to_string_result() const
 {
-    return format_address(reply_address_.name, reply_address_.address, REPLY_TO_HEADER + HEADER_SEPARATOR_STR);
+    return format_address(reply_address_.name, reply_address_.address, std::string(REPLY_TO_HEADER) + HEADER_SEPARATOR_STR);
 }
 
 
@@ -1282,7 +1269,7 @@ std::string inline message::recipients_to_string() const
 
 result<std::string> inline message::recipients_to_string_result() const
 {
-    return format_address_list(recipients_, TO_HEADER);
+    return format_address_list(recipients_, std::string(TO_HEADER));
 }
 
 
@@ -1313,7 +1300,7 @@ std::string inline message::cc_recipients_to_string() const
 
 result<std::string> inline message::cc_recipients_to_string_result() const
 {
-    return format_address_list(cc_recipients_, CC_HEADER);
+    return format_address_list(cc_recipients_, std::string(CC_HEADER));
 }
 
 
@@ -1344,7 +1331,7 @@ std::string inline message::bcc_recipients_to_string() const
 
 result<std::string> inline message::bcc_recipients_to_string_result() const
 {
-    return format_address_list(bcc_recipients_, BCC_HEADER);
+    return format_address_list(bcc_recipients_, std::string(BCC_HEADER));
 }
 
 
@@ -1369,7 +1356,8 @@ std::string inline message::disposition_notification_to_string() const
 
 result<std::string> inline message::disposition_notification_to_string_result() const
 {
-    return format_address(disposition_notification_.name, disposition_notification_.address, DISPOSITION_NOTIFICATION_HEADER + HEADER_SEPARATOR_STR);
+    return format_address(disposition_notification_.name, disposition_notification_.address,
+        std::string(DISPOSITION_NOTIFICATION_HEADER) + HEADER_SEPARATOR_STR);
 }
 
 
@@ -1391,8 +1379,8 @@ result_void inline message::message_id_result(std::string id)
         detail::trim_inplace(id);
     }
 
-    const bool ok = strict_mode_ ? detail::is_valid_message_id_strict(id) : detail::is_valid_message_id_relaxed(id);
-    if (!ok)
+    const bool is_valid = strict_mode_ ? detail::is_valid_message_id_strict(id) : detail::is_valid_message_id_relaxed(id);
+    if (!is_valid)
         return fail_void(errc::mime_parse_error, "Invalid message ID.", "ID is `" + id + "`.");
 
     message_id_ = std::move(id);
@@ -1609,7 +1597,7 @@ void inline message::attach_file(const std::filesystem::path& path, string_t nam
     m.content_transfer_encoding(enc);
     m.content_disposition(content_disposition_t::ATTACHMENT);
     m.name(std::move(name));
-    attachment_source src;
+    mailxx::attachment_source src;
     src.kind = source_kind::file_path;
     src.path = path.string();
     m.attachment_source(src);
@@ -1706,7 +1694,7 @@ void inline message::remove_header(const std::string& name)
 }
 
 
-const message::headers_t& inline message::headers() const
+inline const message::headers_t& message::headers() const
 {
     return headers_;
 }
@@ -1741,62 +1729,65 @@ result<std::string> inline message::format_header_result(bool add_bcc_header) co
 
         std::string from_str;
         MAILXX_TRY_ASSIGN(from_str, from_to_string_result());
-        header += FROM_HEADER + HEADER_SEPARATOR_STR + from_str + codec::END_OF_LINE;
+        header += std::string(FROM_HEADER) + HEADER_SEPARATOR_STR + from_str + codec::END_OF_LINE;
 
         if (!sender_.address.empty())
         {
             std::string sender_str;
             MAILXX_TRY_ASSIGN(sender_str, sender_to_string_result());
-            header += SENDER_HEADER + HEADER_SEPARATOR_STR + sender_str + codec::END_OF_LINE;
+            header += std::string(SENDER_HEADER) + HEADER_SEPARATOR_STR + sender_str + codec::END_OF_LINE;
         }
 
         if (!reply_address_.name.buffer.empty())
         {
             std::string reply_str;
             MAILXX_TRY_ASSIGN(reply_str, reply_address_to_string_result());
-            header += REPLY_TO_HEADER + HEADER_SEPARATOR_STR + reply_str + codec::END_OF_LINE;
+            header += std::string(REPLY_TO_HEADER) + HEADER_SEPARATOR_STR + reply_str + codec::END_OF_LINE;
         }
 
         std::string recipients_str;
         MAILXX_TRY_ASSIGN(recipients_str, recipients_to_string_result());
-        header += TO_HEADER + HEADER_SEPARATOR_STR + recipients_str + codec::END_OF_LINE;
+        header += std::string(TO_HEADER) + HEADER_SEPARATOR_STR + recipients_str + codec::END_OF_LINE;
 
         if (!cc_recipients_.empty())
         {
             std::string cc_str;
             MAILXX_TRY_ASSIGN(cc_str, cc_recipients_to_string_result());
-            header += CC_HEADER + HEADER_SEPARATOR_STR + cc_str + codec::END_OF_LINE;
+            header += std::string(CC_HEADER) + HEADER_SEPARATOR_STR + cc_str + codec::END_OF_LINE;
         }
 
         if (add_bcc_header && !bcc_recipients_.empty())
         {
             std::string bcc_str;
             MAILXX_TRY_ASSIGN(bcc_str, bcc_recipients_to_string_result());
-            header += BCC_HEADER + HEADER_SEPARATOR_STR + bcc_str + codec::END_OF_LINE;
+            header += std::string(BCC_HEADER) + HEADER_SEPARATOR_STR + bcc_str + codec::END_OF_LINE;
         }
 
         if (!disposition_notification_.empty())
         {
             std::string disp_str;
             MAILXX_TRY_ASSIGN(disp_str, disposition_notification_to_string_result());
-            header += DISPOSITION_NOTIFICATION_HEADER + HEADER_SEPARATOR_STR + disp_str + codec::END_OF_LINE;
+            header += std::string(DISPOSITION_NOTIFICATION_HEADER) + HEADER_SEPARATOR_STR + disp_str + codec::END_OF_LINE;
         }
 
-        header += message_id_.empty() ? "" : MESSAGE_ID_HEADER + HEADER_SEPARATOR_STR + format_many_ids(message_id_, MESSAGE_ID_HEADER);
-        header += in_reply_to_.size() == 0 ? "" : IN_REPLY_TO_HEADER + HEADER_SEPARATOR_STR + format_many_ids(in_reply_to_, IN_REPLY_TO_HEADER);
-        header += references_.empty() ? "" : REFERENCES_HEADER + HEADER_SEPARATOR_STR + format_many_ids(references_, REFERENCES_HEADER);
+        header += message_id_.empty() ? "" : std::string(MESSAGE_ID_HEADER) + HEADER_SEPARATOR_STR +
+            format_many_ids(message_id_, std::string(MESSAGE_ID_HEADER));
+        header += in_reply_to_.empty() ? "" : std::string(IN_REPLY_TO_HEADER) + HEADER_SEPARATOR_STR +
+            format_many_ids(in_reply_to_, std::string(IN_REPLY_TO_HEADER));
+        header += references_.empty() ? "" : std::string(REFERENCES_HEADER) + HEADER_SEPARATOR_STR +
+            format_many_ids(references_, std::string(REFERENCES_HEADER));
 
         header += format_date_header();
 
         if (!parts_.empty())
-            header += MIME_VERSION_HEADER + HEADER_SEPARATOR_STR + version_ + codec::END_OF_LINE;
+            header += std::string(MIME_VERSION_HEADER) + HEADER_SEPARATOR_STR + version_ + codec::END_OF_LINE;
         header += mime::format_header();
 
         if (!subject_.buffer.empty())
         {
             std::string subject_str;
             MAILXX_TRY_ASSIGN(subject_str, format_subject());
-            header += SUBJECT_HEADER + HEADER_SEPARATOR_STR + subject_str + codec::END_OF_LINE;
+            header += std::string(SUBJECT_HEADER) + HEADER_SEPARATOR_STR + subject_str + codec::END_OF_LINE;
         }
 
         return ok(std::move(header));
@@ -2261,10 +2252,7 @@ std::string inline message::format_date() const
 
 std::string inline message::format_date_header() const
 {
-    if (date_time_.is_not_a_date_time())
-        return "";
-
-    std::string header = DATE_HEADER + HEADER_SEPARATOR_STR;
+    std::string header = std::string(DATE_HEADER) + HEADER_SEPARATOR_STR;
     header += format_date();
     header += codec::END_OF_LINE;
     return header;

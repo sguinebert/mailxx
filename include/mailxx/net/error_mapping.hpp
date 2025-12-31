@@ -40,21 +40,26 @@ enum class io_stage
     return "unknown";
 }
 
-[[nodiscard]] inline errc map_net_error(io_stage stage, std::error_code ec, bool timeout_triggered) noexcept
+[[nodiscard]] inline errc map_net_error(io_stage stage, mailxx::asio::error_code ec, bool timeout_triggered) noexcept
 {
-    if (timeout_triggered || ec == mailxx::asio::error::timed_out)
+    auto is_err = [&](auto e) noexcept
+    {
+        return ec == mailxx::asio::error::make_error_code(e);
+    };
+
+    if (timeout_triggered || is_err(mailxx::asio::error::timed_out))
         return errc::net_timeout;
-    if (ec == mailxx::asio::error::operation_aborted)
+    if (is_err(mailxx::asio::error::operation_aborted))
         return errc::net_cancelled;
-    if (ec == mailxx::asio::error::eof)
+    if (is_err(mailxx::asio::error::eof))
         return errc::net_eof;
-    if (ec == mailxx::asio::error::connection_refused)
+    if (is_err(mailxx::asio::error::connection_refused))
         return errc::net_connection_refused;
-    if (ec == mailxx::asio::error::connection_reset ||
-        ec == mailxx::asio::error::broken_pipe)
+    if (is_err(mailxx::asio::error::connection_reset) ||
+        is_err(mailxx::asio::error::broken_pipe))
         return errc::net_connection_reset;
-    if (ec == mailxx::asio::error::host_not_found ||
-        ec == mailxx::asio::error::host_not_found_try_again)
+    if (is_err(mailxx::asio::error::host_not_found) ||
+        is_err(mailxx::asio::error::host_not_found_try_again))
         return errc::net_resolve_failed;
 
     switch (stage)

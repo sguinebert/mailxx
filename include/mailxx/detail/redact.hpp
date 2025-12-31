@@ -1,30 +1,12 @@
 #pragma once
 
-#include <cctype>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <mailxx/detail/ascii.hpp>
 
 namespace mailxx::detail
 {
-
-[[nodiscard]] inline bool iequals_ascii(std::string_view a, std::string_view b) noexcept
-{
-    if (a.size() != b.size())
-        return false;
-    for (std::size_t i = 0; i < a.size(); ++i)
-    {
-        char ca = a[i];
-        char cb = b[i];
-        if (ca >= 'a' && ca <= 'z')
-            ca = static_cast<char>(ca - ('a' - 'A'));
-        if (cb >= 'a' && cb <= 'z')
-            cb = static_cast<char>(cb - ('a' - 'A'));
-        if (ca != cb)
-            return false;
-    }
-    return true;
-}
 
 [[nodiscard]] inline bool starts_with_ci(std::string_view text, std::string_view prefix) noexcept
 {

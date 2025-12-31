@@ -56,8 +56,6 @@ public:
     }
 
 private:
-    static constexpr std::string_view charset = base64::CHARSET;
-
     void emit_newline(detail::output_sink& sink)
     {
         if (line_policy_ == 0)
@@ -84,10 +82,10 @@ private:
         const unsigned char octet2 = static_cast<unsigned char>(b2);
 
         char out[4];
-        out[0] = charset[(octet0 & 0xfc) >> 2];
-        out[1] = charset[((octet0 & 0x03) << 4) | ((octet1 & 0xf0) >> 4)];
-        out[2] = charset[((octet1 & 0x0f) << 2) | ((octet2 & 0xc0) >> 6)];
-        out[3] = charset[octet2 & 0x3f];
+        out[0] = base64::CHARSET[(octet0 & 0xfc) >> 2];
+        out[1] = base64::CHARSET[((octet0 & 0x03) << 4) | ((octet1 & 0xf0) >> 4)];
+        out[2] = base64::CHARSET[((octet1 & 0x0f) << 2) | ((octet2 & 0xc0) >> 6)];
+        out[3] = base64::CHARSET[octet2 & 0x3f];
         emit_chars(out, sink);
     }
 
@@ -97,8 +95,8 @@ private:
         const unsigned char octet1 = static_cast<unsigned char>(b1);
 
         char out[4];
-        out[0] = charset[(octet0 & 0xfc) >> 2];
-        out[1] = charset[((octet0 & 0x03) << 4) | ((octet1 & 0xf0) >> 4)];
+        out[0] = base64::CHARSET[(octet0 & 0xfc) >> 2];
+        out[1] = base64::CHARSET[((octet0 & 0x03) << 4) | ((octet1 & 0xf0) >> 4)];
         if (single)
         {
             out[2] = '=';
@@ -106,7 +104,7 @@ private:
         }
         else
         {
-            out[2] = charset[(octet1 & 0x0f) << 2];
+            out[2] = base64::CHARSET[(octet1 & 0x0f) << 2];
             out[3] = '=';
         }
         emit_chars(out, sink);

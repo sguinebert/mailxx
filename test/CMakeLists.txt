@@ -12,9 +12,18 @@ function(add_mailxx_tests SOURCE_FILE)
     target_link_directories(${file_name} PUBLIC ${Boost_LIBRARY_DIRS})
     target_link_libraries(${file_name} PUBLIC ${Boost_LIBRARIES} mailxx ${CMAKE_THREAD_LIBS_INIT})
     install(TARGETS ${file_name} DESTINATION "${SHARE_INSTALL_DIR}/${PROJECT_NAME}/test")
+
+    # MinGW COFF string table can overflow with heavy coroutine symbols in Debug.
+    if (MINGW AND file_name MATCHES "test_(imap_append_streaming|smtp_streaming)")
+        target_compile_options(${file_name} PRIVATE -g0)
+    endif()
 endfunction(add_mailxx_tests)
 
 file(GLOB test_files ${CMAKE_CURRENT_SOURCE_DIR}/test*.cpp)
+if (MINGW)
+    # MinGW COFF string table overflows on heavy coroutine tests.
+    list(FILTER test_files EXCLUDE REGEX "test_(imap_append_streaming|smtp_streaming)\\.cpp$")
+endif()
 foreach(file_name ${test_files})
     add_mailxx_tests(${file_name})
 endforeach(file_name ${test_files})

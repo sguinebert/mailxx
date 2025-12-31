@@ -31,6 +31,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/detail/exception_bridge.hpp>
 #include <mailxx/detail/log.hpp>
 #include <mailxx/detail/oauth2_retry.hpp>
+#include <mailxx/detail/output_sink.hpp>
 #include <mailxx/detail/result.hpp>
 
 #include <mailxx/net/dialog.hpp>
@@ -106,13 +107,6 @@ public:
      * If options.auto_starttls is enabled, performs greeting -> EHLO -> STARTTLS -> EHLO.
      */
     awaitable<mailxx::result<void>> connect(const std::string& host, const std::string& service, mailxx::net::tls_mode mode,
-        ssl::context* tls_ctx = nullptr, std::string sni = {})
-    {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
-    }
-
-    awaitable<mailxx::result<void>> connect(std::string host, std::string service, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
@@ -629,7 +623,7 @@ private:
         std::string error_msg_;
     };
 
-    class smtp_dot_stuffing_sink : public detail::output_sink
+    class smtp_dot_stuffing_sink : public mailxx::detail::output_sink
     {
     public:
         smtp_dot_stuffing_sink(std::size_t flush_threshold = 8192, streaming_queue* queue = nullptr)

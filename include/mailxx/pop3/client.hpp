@@ -226,13 +226,6 @@ public:
         co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
     }
 
-    awaitable<result_void> connect(std::string host, std::string service, mailxx::net::tls_mode mode,
-        ssl::context* tls_ctx = nullptr, std::string sni = {})
-    {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
-    }
-
     awaitable<result<std::string>> read_greeting()
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
@@ -503,7 +496,7 @@ public:
             // Wait before reconnecting
             steady_timer timer(dlg_.stream().get_executor());
             timer.expires_after(delay);
-            MAILXX_TRY_CO_AWAIT(mailxx::to_result(timer.async_wait(use_nothrow_awaitable)));
+            MAILXX_CO_TRY_VOID(mailxx::to_result(co_await timer.async_wait(use_nothrow_awaitable)));
             
             // Try to reconnect
             auto reconnect_res = co_await reconnect_with_snapshot(snapshot);
@@ -691,8 +684,8 @@ private:
         mailxx::net::tls_mode mode = mailxx::net::tls_mode::none,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
-        MAILXX_TRY(ensure_state(state_t::DISCONNECTED, "CONNECT"));
-        MAILXX_TRY(validate_no_crlf_or_nul(host, "host"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::DISCONNECTED, "CONNECT"));
+        MAILXX_CO_TRY_VOID(validate_no_crlf_or_nul(host, "host"));
         host_ = host;
         remember_connection(host, service);
         remember_tls(mode, tls_ctx, sni);
@@ -714,12 +707,13 @@ private:
         capabilities_.reset();
         const auto executor = dlg_.stream().get_executor();
         tcp::resolver resolver(executor);
-        MAILXX_TRY_ASSIGN(auto endpoints, mailxx::to_result(
+        tcp::resolver::results_type endpoints;
+        MAILXX_CO_TRY_ASSIGN(endpoints, mailxx::to_result(
             co_await resolver.async_resolve(host, service, use_nothrow_awaitable),
             mailxx::net::io_stage::resolve));
 
         mailxx::net::upgradable_stream stream(executor);
-        MAILXX_TRY(mailxx::to_result(
+        MAILXX_CO_TRY_VOID(mailxx::to_result(
             co_await async_connect(stream.lowest_layer(), endpoints, use_nothrow_awaitable),
             mailxx::net::io_stage::connect));
         
@@ -729,7 +723,8 @@ private:
                 co_return fail_void(map_pop3_error(error_kind::invalid_state),
                     "TLS context is required.",
                     make_pop3_detail("CONNECT", "Implicit TLS needs a context."));
-            std::string resolved_sni = MAILXX_CO_TRY(resolve_sni(host, std::move(sni)));
+            std::string resolved_sni;
+            MAILXX_CO_TRY_ASSIGN(resolved_sni, resolve_sni(host, std::move(sni)));
             remember_tls(mailxx::net::tls_mode::implicit, tls_ctx, resolved_sni);
             auto tls_res = co_await stream.start_tls(*tls_ctx, std::move(resolved_sni), options_.tls);
             if (!tls_res)
@@ -756,10 +751,13 @@ private:
 
     awaitable<result<std::string>> read_greeting_impl()
     {
-        MAILXX_TRY(ensure_state(state_t::CONNECTED, "READ_GREETING"));
-        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::CONNECTED, "READ_GREETING"));
+        std::string line;
+        MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
         last_greeting_line_ = line;
-        auto [status, msg] = MAILXX_CO_TRY(parse_status(line, "GREETING"));
+        std::tuple<std::string, std::string> status_msg;
+        MAILXX_CO_TRY_ASSIGN(status_msg, parse_status(line, "GREETING"));
+        auto [status, msg] = std::move(status_msg);
         if (!is_ok(status))
             co_return fail<std::string>(map_pop3_error(error_kind::response, status),
                 "Connection to server failure.",
@@ -770,14 +768,15 @@ private:
 
     awaitable<result<capabilities_t>> capa_impl()
     {
-        MAILXX_TRY(ensure_state_at_least(state_t::GREETING, "CAPA"));
+        MAILXX_CO_TRY_VOID(ensure_state_at_least(state_t::GREETING, "CAPA"));
         MAILXX_TRY_CO_AWAIT(send_command("CAPA"));
         MAILXX_TRY_CO_AWAIT(read_ok_response("Capabilities failure.", "CAPA"));
 
         capabilities_t caps;
         while (true)
         {
-            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+            std::string line;
+            MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -791,7 +790,7 @@ private:
 
     awaitable<result_void> start_tls_impl(ssl::context& context, std::string sni)
     {
-        MAILXX_TRY(ensure_state(state_t::GREETING, "STLS"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::GREETING, "STLS"));
         // Require CAPA to be called first to avoid optimistic STLS.
         if (!capabilities_.has_value())
             co_return fail_void(map_pop3_error(error_kind::invalid_state),
@@ -803,14 +802,18 @@ private:
                 make_pop3_detail("STLS"));
 
         MAILXX_TRY_CO_AWAIT(send_command("STLS"));
-        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
-        auto [status, msg] = MAILXX_CO_TRY(parse_status(line, "STLS"));
+        std::string line;
+        MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
+        std::tuple<std::string, std::string> status_msg;
+        MAILXX_CO_TRY_ASSIGN(status_msg, parse_status(line, "STLS"));
+        auto [status, msg] = std::move(status_msg);
         if (!is_ok(status))
             co_return fail_void(map_pop3_error(error_kind::response, status),
                 "STARTTLS failure.",
                 make_pop3_detail("STLS", line));
 
-        std::string resolved_sni = MAILXX_CO_TRY(resolve_sni(host_, std::move(sni)));
+        std::string resolved_sni;
+        MAILXX_CO_TRY_ASSIGN(resolved_sni, resolve_sni(host_, std::move(sni)));
         remember_tls(mailxx::net::tls_mode::starttls, &context, resolved_sni);
         MAILXX_TRY_CO_AWAIT(upgrade_to_tls(context, std::move(resolved_sni)));
         co_return ok();
@@ -818,10 +821,10 @@ private:
 
     awaitable<result_void> login_impl(const std::string& username, const std::string& password)
     {
-        MAILXX_TRY(ensure_state(state_t::GREETING, "LOGIN"));
-        MAILXX_TRY(enforce_auth_tls_policy());
-        MAILXX_TRY(validate_no_crlf_or_nul(username, "username"));
-        MAILXX_TRY(validate_no_crlf_or_nul(password, "password"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::GREETING, "LOGIN"));
+        MAILXX_CO_TRY_VOID(enforce_auth_tls_policy());
+        MAILXX_CO_TRY_VOID(validate_no_crlf_or_nul(username, "username"));
+        MAILXX_CO_TRY_VOID(validate_no_crlf_or_nul(password, "password"));
         MAILXX_TRY_CO_AWAIT(send_command("USER " + username));
         MAILXX_TRY_CO_AWAIT(read_ok_response("Username rejection.", "USER", error_kind::auth));
 
@@ -834,15 +837,16 @@ private:
 
     awaitable<result_void> auth_plain_impl(const std::string& username, const std::string& password)
     {
-        MAILXX_TRY(ensure_state(state_t::GREETING, "AUTH PLAIN"));
-        MAILXX_TRY(enforce_auth_tls_policy());
-        MAILXX_TRY(validate_no_crlf_or_nul(username, "username"));
-        MAILXX_TRY(validate_no_crlf_or_nul(password, "password"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::GREETING, "AUTH PLAIN"));
+        MAILXX_CO_TRY_VOID(enforce_auth_tls_policy());
+        MAILXX_CO_TRY_VOID(validate_no_crlf_or_nul(username, "username"));
+        MAILXX_CO_TRY_VOID(validate_no_crlf_or_nul(password, "password"));
         std::string encoded;
-        MAILXX_TRY_ASSIGN(encoded, sasl::encode_plain(username, password));
+        MAILXX_CO_TRY_ASSIGN(encoded, sasl::encode_plain(username, password));
         
         MAILXX_TRY_CO_AWAIT(send_command("AUTH PLAIN"));
-        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+        std::string line;
+        MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
         
         if (!line.empty() && line[0] == '+')
         {
@@ -851,7 +855,9 @@ private:
         }
         else
         {
-            auto [status, msg] = MAILXX_CO_TRY(parse_status(line, "AUTH PLAIN"));
+            std::tuple<std::string, std::string> status_msg;
+            MAILXX_CO_TRY_ASSIGN(status_msg, parse_status(line, "AUTH PLAIN"));
+            auto [status, msg] = std::move(status_msg);
             if (!is_ok(status))
                 co_return fail_void(map_pop3_error(error_kind::auth),
                     "PLAIN authentication failure.",
@@ -865,15 +871,16 @@ private:
 
     awaitable<result_void> auth_xoauth2_impl(const std::string& username, const std::string& access_token)
     {
-        MAILXX_TRY(ensure_state(state_t::GREETING, "AUTH XOAUTH2"));
-        MAILXX_TRY(enforce_auth_tls_policy());
-        MAILXX_TRY(validate_no_crlf_or_nul(username, "username"));
-        MAILXX_TRY(validate_no_crlf_or_nul(access_token, "access_token"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::GREETING, "AUTH XOAUTH2"));
+        MAILXX_CO_TRY_VOID(enforce_auth_tls_policy());
+        MAILXX_CO_TRY_VOID(validate_no_crlf_or_nul(username, "username"));
+        MAILXX_CO_TRY_VOID(validate_no_crlf_or_nul(access_token, "access_token"));
         std::string encoded;
-        MAILXX_TRY_ASSIGN(encoded, sasl::encode_xoauth2(username, access_token));
+        MAILXX_CO_TRY_ASSIGN(encoded, sasl::encode_xoauth2(username, access_token));
         
         MAILXX_TRY_CO_AWAIT(send_command("AUTH XOAUTH2 " + encoded));
-        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+        std::string line;
+        MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
         
         if (!line.empty() && line[0] == '+')
         {
@@ -882,7 +889,9 @@ private:
         }
         else
         {
-            auto [status, msg] = MAILXX_CO_TRY(parse_status(line, "AUTH XOAUTH2"));
+            std::tuple<std::string, std::string> status_msg;
+            MAILXX_CO_TRY_ASSIGN(status_msg, parse_status(line, "AUTH XOAUTH2"));
+            auto [status, msg] = std::move(status_msg);
             if (!is_ok(status))
                 co_return fail_void(map_pop3_error(error_kind::auth),
                     "XOAUTH2 authentication failure.",
@@ -896,16 +905,17 @@ private:
 
     awaitable<result_void> apop_impl(const std::string& username, const std::string& password)
     {
-        MAILXX_TRY(ensure_state(state_t::GREETING, "APOP"));
-        MAILXX_TRY(validate_no_crlf_or_nul(username, "username"));
-        MAILXX_TRY(validate_no_crlf_or_nul(password, "password"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::GREETING, "APOP"));
+        MAILXX_CO_TRY_VOID(validate_no_crlf_or_nul(username, "username"));
+        MAILXX_CO_TRY_VOID(validate_no_crlf_or_nul(password, "password"));
 
         if (last_greeting_line_.empty())
             co_return fail_void(map_pop3_error(error_kind::invalid_state),
                 "APOP challenge missing.",
                 make_pop3_detail("APOP"));
 
-        const std::string challenge = MAILXX_CO_TRY(extract_apop_challenge(last_greeting_line_));
+        std::string challenge;
+        MAILXX_CO_TRY_ASSIGN(challenge, extract_apop_challenge(last_greeting_line_));
         const std::string digest = md5_hex(challenge + password);
 
         std::string cmd;
@@ -956,9 +966,10 @@ private:
 
     awaitable<result<mailbox_stat_t>> stat_impl()
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "STAT"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "STAT"));
         MAILXX_TRY_CO_AWAIT(send_command("STAT"));
-        std::string msg = MAILXX_CO_TRY(co_await read_ok_response("Reading statistics failure.", "STAT"));
+        std::string msg;
+        MAILXX_CO_TRY_ASSIGN(msg, co_await read_ok_response("Reading statistics failure.", "STAT"));
         mailbox_stat_t stat;
         std::istringstream iss(msg);
         if (!(iss >> stat.messages_no >> stat.mailbox_size))
@@ -970,14 +981,15 @@ private:
 
     awaitable<result<message_list_t>> list_impl()
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "LIST"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "LIST"));
         MAILXX_TRY_CO_AWAIT(send_command("LIST"));
         MAILXX_TRY_CO_AWAIT(read_ok_response("Listing all messages failure.", "LIST"));
 
         message_list_t msg_list;
         while (true)
         {
-            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+            std::string line;
+            MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -996,12 +1008,13 @@ private:
 
     awaitable<result<message_list_t>> list_impl(unsigned message_no)
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "LIST"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "LIST"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "LIST ");
         mailxx::detail::append_uint(cmd, message_no);
         MAILXX_TRY_CO_AWAIT(send_command(cmd));
-        std::string msg = MAILXX_CO_TRY(co_await read_ok_response("Listing message failure.", "LIST"));
+        std::string msg;
+        MAILXX_CO_TRY_ASSIGN(msg, co_await read_ok_response("Listing message failure.", "LIST"));
 
         message_list_t msg_list;
         std::istringstream iss(msg);
@@ -1017,7 +1030,7 @@ private:
 
     awaitable<result<uidl_list_t>> uidl_impl(unsigned message_no)
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "UIDL"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "UIDL"));
         std::string cmd;
         if (message_no == 0)
         {
@@ -1029,7 +1042,8 @@ private:
             mailxx::detail::append_uint(cmd, message_no);
         }
         MAILXX_TRY_CO_AWAIT(send_command(cmd));
-        std::string msg = MAILXX_CO_TRY(co_await read_ok_response("Unique ID listing failure.", "UIDL"));
+        std::string msg;
+        MAILXX_CO_TRY_ASSIGN(msg, co_await read_ok_response("Unique ID listing failure.", "UIDL"));
 
         uidl_list_t uidl_list;
         if (message_no != 0)
@@ -1047,7 +1061,8 @@ private:
 
         while (true)
         {
-            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+            std::string line;
+            MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -1066,7 +1081,7 @@ private:
 
     awaitable<result<std::string>> retr_impl(unsigned long message_no)
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "RETR"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "RETR"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "RETR ");
         mailxx::detail::append_uint(cmd, message_no);
@@ -1076,7 +1091,8 @@ private:
         std::string msg_str;
         while (true)
         {
-            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+            std::string line;
+            MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -1091,7 +1107,7 @@ private:
         unsigned long expected_size,
         progress_callback_t progress)
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "RETR"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "RETR"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "RETR ");
         mailxx::detail::append_uint(cmd, message_no);
@@ -1113,7 +1129,8 @@ private:
 
         while (true)
         {
-            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+            std::string line;
+            MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -1143,7 +1160,7 @@ private:
 
     awaitable<result<std::string>> top_impl(unsigned message_no, unsigned lines)
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "TOP"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "TOP"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "TOP ");
         mailxx::detail::append_uint(cmd, message_no);
@@ -1155,7 +1172,8 @@ private:
         std::string msg_str;
         while (true)
         {
-            std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
+            std::string line;
+            MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
             if (line == END_OF_DATA)
                 break;
             if (!line.empty() && line[0] == '.')
@@ -1168,15 +1186,16 @@ private:
     awaitable<result<mailxx::message>> retr_message_impl(unsigned message_no)
     {
         // Note: retr_impl already checks TRANSACTION state
-        std::string msg_str = MAILXX_CO_TRY(co_await retr_impl(message_no));
+        std::string msg_str;
+        MAILXX_CO_TRY_ASSIGN(msg_str, co_await retr_impl(message_no));
         mailxx::message msg;
-        MAILXX_TRY_ASSIGN(msg, mailxx::message::parse_result(msg_str));
+        MAILXX_CO_TRY_ASSIGN(msg, mailxx::message::parse_result(msg_str));
         co_return ok(std::move(msg));
     }
 
     awaitable<result_void> dele_impl(unsigned long message_no)
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "DELE"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "DELE"));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "DELE ");
         mailxx::detail::append_uint(cmd, message_no);
@@ -1187,7 +1206,7 @@ private:
 
     awaitable<result_void> rset_impl()
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "RSET"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "RSET"));
         MAILXX_TRY_CO_AWAIT(send_command("RSET"));
         MAILXX_TRY_CO_AWAIT(read_ok_response("Reset failure.", "RSET"));
         co_return ok();
@@ -1195,7 +1214,7 @@ private:
 
     awaitable<result_void> noop_impl()
     {
-        MAILXX_TRY(ensure_state(state_t::TRANSACTION, "NOOP"));
+        MAILXX_CO_TRY_VOID(ensure_state(state_t::TRANSACTION, "NOOP"));
         MAILXX_TRY_CO_AWAIT(send_command("NOOP"));
         MAILXX_TRY_CO_AWAIT(read_ok_response("Noop failure.", "NOOP"));
         co_return ok();
@@ -1203,7 +1222,7 @@ private:
 
     awaitable<result_void> quit_impl()
     {
-        MAILXX_TRY(ensure_state_at_least(state_t::GREETING, "QUIT"));
+        MAILXX_CO_TRY_VOID(ensure_state_at_least(state_t::GREETING, "QUIT"));
         MAILXX_TRY_CO_AWAIT(send_command("QUIT"));
         MAILXX_TRY_CO_AWAIT(read_ok_response("Quit failure.", "QUIT"));
         state_ = state_t::UPDATE;
@@ -1258,8 +1277,11 @@ private:
         std::string_view command,
         error_kind kind = error_kind::response)
     {
-        std::string line = MAILXX_CO_TRY(co_await dlg_.read_line_r());
-        auto [status, msg] = MAILXX_CO_TRY(parse_status(line, command));
+        std::string line;
+        MAILXX_CO_TRY_ASSIGN(line, co_await dlg_.read_line_r());
+        std::tuple<std::string, std::string> status_msg;
+        MAILXX_CO_TRY_ASSIGN(status_msg, parse_status(line, command));
+        auto [status, msg] = std::move(status_msg);
         if (!is_ok(status))
             co_return fail<std::string>(map_pop3_error(kind, status), error_message, make_pop3_detail(command, line));
         co_return ok(msg);

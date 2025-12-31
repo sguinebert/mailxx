@@ -159,8 +159,7 @@ private:
         }
         
         waiter->ready.store(true, std::memory_order_release);
-        mailxx::asio::error_code ignored;
-        waiter->timer.cancel(ignored);
+        waiter->timer.cancel();
     }
 
     mailxx::asio::any_io_executor executor_;

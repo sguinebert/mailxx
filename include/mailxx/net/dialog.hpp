@@ -21,6 +21,8 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <chrono>
 #include <atomic>
 #include <utility>
+#include <new>
+#include <type_traits>
 #include <mailxx/detail/asio_decl.hpp>
 #include <mailxx/detail/result.hpp>
 #include <mailxx/detail/log.hpp>
@@ -32,8 +34,34 @@ namespace mailxx
 namespace net
 {
 
+namespace detail
+{
+template<typename>
+struct signature_arity;
+
+template<typename R, typename... Args>
+struct signature_arity<R(Args...)> : std::integral_constant<std::size_t, sizeof...(Args)>
+{
+};
+} // namespace detail
+
 // Import Asio types from the centralized declarations
 using namespace mailxx::asio;
+
+namespace detail
+{
+template<typename ErrorEnum>
+[[nodiscard]] inline asio::error_code make_err(ErrorEnum e) noexcept
+{
+    return asio::error::make_error_code(e);
+}
+
+template<typename ErrorEnum>
+[[nodiscard]] inline bool is_err(const asio::error_code& ec, ErrorEnum e) noexcept
+{
+    return ec == make_err(e);
+}
+} // namespace detail
 
 /// Default maximum line length for network protocols (RFC 5321: 998 + CRLF, but commonly 8K)
 inline constexpr std::size_t DEFAULT_MAX_LINE_LENGTH = 8192;
@@ -77,6 +105,20 @@ public:
     {
     }
 
+    dialog(const dialog&) = delete;
+    dialog& operator=(const dialog&) = delete;
+    dialog(dialog&&) noexcept(std::is_nothrow_move_constructible_v<Stream>) = default;
+    dialog& operator=(dialog&& other) noexcept(std::is_nothrow_move_constructible_v<Stream>)
+    {
+        if (this != &other)
+        {
+            // Rebuild to avoid requiring Stream move assignment.
+            this->~dialog();
+            new (this) dialog(std::move(other));
+        }
+        return *this;
+    }
+
     ~dialog() = default;
 
     void set_trace_protocol(std::string protocol)
@@ -117,7 +159,7 @@ public:
     {
         auto [ec, bytes] = co_await write_line(line, use_nothrow_awaitable);
         (void)bytes;
-        const bool timeout_triggered = (ec == asio::error::timed_out);
+        const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
         if (ec)
         {
             const errc code = map_net_error(io_stage::write, ec, timeout_triggered);
@@ -149,7 +191,7 @@ public:
     {
         auto [ec, bytes] = co_await write_raw(buffers, use_nothrow_awaitable);
         (void)bytes;
-        const bool timeout_triggered = (ec == asio::error::timed_out);
+        const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
         if (ec)
         {
             const errc code = map_net_error(io_stage::write, ec, timeout_triggered);
@@ -180,15 +222,15 @@ public:
                         std::size_t line_length = (pos > 0 && read_buffer_[pos - 1] == '\r') ? pos - 1 : pos;
                         if (line_length > max_line_length_)
                         {
-                            self.complete(asio::error::message_size, std::string());
+                            self.complete(detail::make_err(asio::error::message_size), std::string());
                             return;
                         }
-                std::string line = read_buffer_.substr(0, line_length);
-                read_buffer_.erase(0, pos + 1);
-                trace_line(mailxx::log::direction::receive, line);
-                self.complete(ec, std::move(line));
-                return;
-            }
+                        std::string line = read_buffer_.substr(0, line_length);
+                        read_buffer_.erase(0, pos + 1);
+                        trace_line(mailxx::log::direction::receive, line);
+                        self.complete(ec, std::move(line));
+                        return;
+                    }
 
                     std::size_t max_size = max_line_length_ + 2;
                     async_with_timeout<void(asio::error_code, std::size_t)>(
@@ -209,14 +251,14 @@ public:
                 auto pos = read_buffer_.find('\n');
                 if (pos == std::string::npos)
                 {
-                    self.complete(asio::error::invalid_argument, std::string());
+                    self.complete(detail::make_err(asio::error::invalid_argument), std::string());
                     return;
                 }
 
                 std::size_t line_length = (pos > 0 && read_buffer_[pos - 1] == '\r') ? pos - 1 : pos;
                 if (line_length > max_line_length_)
                 {
-                    self.complete(asio::error::message_size, std::string());
+                    self.complete(detail::make_err(asio::error::message_size), std::string());
                     return;
                 }
                 std::string line = read_buffer_.substr(0, line_length);
@@ -229,7 +271,7 @@ public:
     [[nodiscard]] awaitable<mailxx::result<std::string>> read_line_r()
     {
         auto [ec, line] = co_await read_line(use_nothrow_awaitable);
-        const bool timeout_triggered = (ec == asio::error::timed_out);
+        const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
         if (ec)
         {
             const errc code = map_net_error(io_stage::read, ec, timeout_triggered);
@@ -285,7 +327,7 @@ public:
                 }
                 if (read_buffer_.size() < n)
                 {
-                    self.complete(asio::error::operation_aborted, std::string());
+                    self.complete(detail::make_err(asio::error::operation_aborted), std::string());
                     return;
                 }
                 std::string out(read_buffer_.data(), n);
@@ -298,7 +340,7 @@ public:
     [[nodiscard]] awaitable<mailxx::result<std::string>> read_exactly_r(std::size_t n)
     {
         auto [ec, out] = co_await read_exactly(n, use_nothrow_awaitable);
-        const bool timeout_triggered = (ec == asio::error::timed_out);
+        const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
         if (ec)
         {
             const errc code = map_net_error(io_stage::read, ec, timeout_triggered);
@@ -324,7 +366,8 @@ public:
                     initiation(std::move(self));
                     return;
                 }
-                self.complete(ec, std::move(results)...);
+                if constexpr (sizeof...(results) + 1 == detail::signature_arity<Signature>::value)
+                    self.complete(ec, std::move(results)...);
             }, token, stream_);
     }
 
@@ -360,9 +403,10 @@ public:
                 }
                 if (timer)
                     timer->cancel();
-                if (state->timed_out.load() && ec == asio::error::operation_aborted)
-                    ec = asio::error::timed_out;
-                self.complete(ec, std::move(results)...);
+                if (state->timed_out.load() && detail::is_err(ec, asio::error::operation_aborted))
+                    ec = detail::make_err(asio::error::timed_out);
+                if constexpr (sizeof...(results) + 1 == detail::signature_arity<Signature>::value)
+                    self.complete(ec, std::move(results)...);
             }, token, stream_);
     }
 
@@ -440,7 +484,7 @@ protected:
         const asio::error_code& ec,
         std::source_location where = std::source_location::current()) const
     {
-        const bool timeout_triggered = (ec == asio::error::timed_out);
+        const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
         const errc code = map_net_error(io_stage::read, ec, timeout_triggered);
         auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::read, "generic");
         detail.add("sys", format_sys(ec));

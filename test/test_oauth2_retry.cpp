@@ -60,7 +60,7 @@ BOOST_AUTO_TEST_CASE(oauth2_retry_on_auth_failed)
             };
 
             auto res = co_await mailxx::detail::oauth2_auth_with_retry(source, auth, should_retry);
-            BOOST_TEST(res);
+            BOOST_TEST(res.has_value());
             co_return;
         },
         mailxx::asio::detached);
@@ -106,7 +106,7 @@ BOOST_AUTO_TEST_CASE(oauth2_retry_not_called_on_success)
             };
 
             auto res = co_await mailxx::detail::oauth2_auth_with_retry(source, auth, should_retry);
-            BOOST_TEST(res);
+            BOOST_TEST(res.has_value());
             co_return;
         },
         mailxx::asio::detached);
@@ -150,8 +150,8 @@ BOOST_AUTO_TEST_CASE(oauth2_retry_skips_non_auth_errors)
             };
 
             auto res = co_await mailxx::detail::oauth2_auth_with_retry(source, auth, should_retry);
-            BOOST_TEST(!res);
-            BOOST_TEST(res.error().code == mailxx::errc::net_eof);
+            BOOST_TEST(!res.has_value());
+            BOOST_TEST(mailxx::to_string(res.error().code) == "net_eof");
             co_return;
         },
         mailxx::asio::detached);

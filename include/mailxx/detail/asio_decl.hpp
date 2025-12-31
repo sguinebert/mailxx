@@ -46,7 +46,11 @@ namespace mailxx::asio
     using ::asio::detached;
     using ::asio::use_awaitable;
     using ::asio::io_context;
+#if defined(ASIO_USE_TS_EXECUTOR_AS_DEFAULT)
+    using any_io_executor = ::asio::io_context::executor_type;
+#else
     using ::asio::any_io_executor;
+#endif
     using ::asio::steady_timer;
     using ::asio::streambuf;
     namespace experimental = ::asio::experimental;
@@ -63,7 +67,13 @@ namespace mailxx::asio
     using ::asio::async_connect;
     using ::asio::dynamic_buffer;
     using ::asio::transfer_exactly;
-    using ::asio::get_lowest_layer;
+
+    // Sync operations and tokens used in tests/helpers
+    using ::asio::read;
+    using ::asio::write;
+    using ::asio::read_until;
+    using ::asio::use_future;
+    namespace this_coro = ::asio::this_coro;
     
     namespace ssl = ::asio::ssl;
     namespace error = ::asio::error;
@@ -116,7 +126,11 @@ namespace mailxx::asio
     using boost::asio::detached;
     using boost::asio::use_awaitable;
     using boost::asio::io_context;
+#if defined(BOOST_ASIO_USE_TS_EXECUTOR_AS_DEFAULT)
+    using any_io_executor = boost::asio::io_context::executor_type;
+#else
     using boost::asio::any_io_executor;
+#endif
     using boost::asio::steady_timer;
     using boost::asio::redirect_error;
     using boost::asio::streambuf;
@@ -134,7 +148,13 @@ namespace mailxx::asio
     using boost::asio::async_connect;
     using boost::asio::dynamic_buffer;
     using boost::asio::transfer_exactly;
-    using boost::asio::get_lowest_layer;
+
+    // Sync operations and tokens used in tests/helpers
+    using boost::asio::read;
+    using boost::asio::write;
+    using boost::asio::read_until;
+    using boost::asio::use_future;
+    namespace this_coro = boost::asio::this_coro;
     
     namespace ssl = boost::asio::ssl;
     namespace error = boost::asio::error;
@@ -151,11 +171,29 @@ namespace mailxx::asio
 
 } // namespace mailxx::asio
 
+    inline constexpr auto use_nothrow_awaitable = boost::asio::as_tuple(boost::asio::use_awaitable);
+
+
 #else
 #error "mailxx requires coroutine support (C++20) and Boost.Asio 1.21+ (Boost 1.78+)"
 #endif
 
 #endif // MAILXX_USE_STANDALONE_ASIO
+
+namespace mailxx::asio
+{
+    template <typename T>
+    decltype(auto) get_lowest_layer(T& stream) noexcept(noexcept(stream.lowest_layer()))
+    {
+        return stream.lowest_layer();
+    }
+
+    template <typename T>
+    decltype(auto) get_lowest_layer(const T& stream) noexcept(noexcept(stream.lowest_layer()))
+    {
+        return stream.lowest_layer();
+    }
+} // namespace mailxx::asio
 
 // Common chrono literals
 namespace mailxx

@@ -78,7 +78,7 @@ int main()
             (void)select_resp;
             (void)stat;
 
-            auto search_res = co_await conn.search("SUBJECT \\"mailxx\\"", true);
+            auto search_res = co_await conn.search(R"(SUBJECT "mailxx")", true);
             if (!search_res)
             {
                 print_error(search_res.error());

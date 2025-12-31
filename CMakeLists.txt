@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+cmake_policy(SET CMP0167 NEW)
+
 if(NOT DEFINED LIB_SUFFIX)
   set(LIB_SUFFIX "" CACHE STRING "Suffix for installed library path. Ex. 64 for lib64")
 endif(NOT DEFINED LIB_SUFFIX)
@@ -62,17 +64,12 @@ if(WIN32)
     set(Boost_USE_STATIC_LIBS ON)
 endif(WIN32)
 
-find_package(Boost REQUIRED COMPONENTS regex)
+find_package(Boost REQUIRED CONFIG COMPONENTS regex)
 find_package(OpenSSL)
 set(CMAKE_THREAD_PREFER_PTHREAD)
 # "Use of both the imported target as well as this switch is highly recommended for new code."
 set(THREADS_PREFER_PTHREAD_FLAG)
 find_package(Threads)
-
-set(project_sources
-    ${PROJECT_SOURCE_DIR}/src/message.cpp
-    ${PROJECT_SOURCE_DIR}/src/mime.cpp
-)
 
 set(project_headers
     ${PROJECT_SOURCE_DIR}/include/mailxx/export.hpp
@@ -123,8 +120,44 @@ if(${mailxx_BUILD_DOCUMENTATION})
     endif(DOXYGEN_FOUND)
 endif(${mailxx_BUILD_DOCUMENTATION})
 
-add_library(${PROJECT_NAME} ${project_sources} ${project_headers})
-add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
+# add_library(${PROJECT_NAME} ${project_sources} ${project_headers})
+# add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
+
+add_library(mailxx INTERFACE)
+add_library(mailxx::mailxx ALIAS mailxx)
+
+target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
+target_compile_definitions(${PROJECT_NAME} INTERFACE MAILXX_STATIC_DEFINE)
+
+target_include_directories(${PROJECT_NAME} INTERFACE
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+    "$<INSTALL_INTERFACE:${INCLUDE_INSTALL_DIR}>"
+)
+
+# Prefer modern imported targets
+cmake_policy(SET CMP0167 NEW)
+find_package(Boost REQUIRED CONFIG COMPONENTS regex)
+target_link_libraries(${PROJECT_NAME} INTERFACE Boost::regex)
+
+find_package(Threads REQUIRED)
+target_link_libraries(${PROJECT_NAME} INTERFACE Threads::Threads)
+
+find_package(OpenSSL QUIET)
+if(OpenSSL_FOUND)
+    target_link_libraries(${PROJECT_NAME} INTERFACE OpenSSL::SSL OpenSSL::Crypto)
+elseif(MINGW)
+    set(_mailxx_msys_root "C:/msys64/mingw64")
+    if(EXISTS "${_mailxx_msys_root}/lib/libssl.dll.a" AND EXISTS "${_mailxx_msys_root}/lib/libcrypto.dll.a")
+        find_library(OPENSSL_SSL_LIBRARY NAMES ssl libssl HINTS "${_mailxx_msys_root}/lib")
+        find_library(OPENSSL_CRYPTO_LIBRARY NAMES crypto libcrypto HINTS "${_mailxx_msys_root}/lib")
+        if(OPENSSL_SSL_LIBRARY AND OPENSSL_CRYPTO_LIBRARY)
+            target_include_directories(${PROJECT_NAME} INTERFACE "${_mailxx_msys_root}/include")
+            target_link_libraries(${PROJECT_NAME} INTERFACE "${OPENSSL_SSL_LIBRARY}" "${OPENSSL_CRYPTO_LIBRARY}")
+        endif()
+    endif()
+endif()
+
+
 
 # pkg-config support
 set(prefix "${CMAKE_INSTALL_PREFIX}")
@@ -150,33 +183,34 @@ install(FILES ${CMAKE_BINARY_DIR}/version.hpp DESTINATION ${INCLUDE_INSTALL_DIR}
 
 # generate the export header for exporting symbols
 # this is needed to generate a shared library.
-include(GenerateExportHeader)
-generate_export_header(${PROJECT_NAME} EXPORT_FILE_NAME export.hpp)
-target_include_directories(${PROJECT_NAME}
-    PUBLIC
-        "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include;${CMAKE_CURRENT_BINARY_DIR}>"
-        "$<INSTALL_INTERFACE:include>"
-)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/export.hpp DESTINATION "${INCLUDE_INSTALL_DIR}/${PROJECT_NAME}")
+# include(GenerateExportHeader)
+# generate_export_header(${PROJECT_NAME} EXPORT_FILE_NAME export.hpp)
+# target_include_directories(${PROJECT_NAME}
+#     PUBLIC
+#         "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include;${CMAKE_CURRENT_BINARY_DIR}>"
+#         "$<INSTALL_INTERFACE:include>"
+# )
+# install(FILES ${CMAKE_CURRENT_BINARY_DIR}/export.hpp DESTINATION "${INCLUDE_INSTALL_DIR}/${PROJECT_NAME}")
 
-if(Boost_FOUND)
-    target_include_directories(${PROJECT_NAME} PUBLIC ${Boost_INCLUDE_DIRS})
-    target_link_libraries(${PROJECT_NAME} ${Boost_LIBRARIES})
-endif()
+# if(Boost_FOUND)
+#     target_include_directories(${PROJECT_NAME} PUBLIC ${Boost_INCLUDE_DIRS})
+#     target_link_libraries(${PROJECT_NAME} ${Boost_LIBRARIES})
+# endif()
 
-if(OPENSSL_FOUND)
-    target_include_directories(${PROJECT_NAME} PUBLIC ${OPENSSL_INCLUDE_DIR})
-    target_link_libraries(${PROJECT_NAME} ${OPENSSL_LIBRARIES})
-endif()
+# if(OPENSSL_FOUND)
+#     target_include_directories(${PROJECT_NAME} PUBLIC ${OPENSSL_INCLUDE_DIR})
+#     target_link_libraries(${PROJECT_NAME} ${OPENSSL_LIBRARIES})
+# endif()
 
 if(MINGW)
-    target_link_libraries(${PROJECT_NAME} -lws2_32 )
+    target_link_libraries(${PROJECT_NAME} INTERFACE  -lws2_32 )
+    target_compile_options(${PROJECT_NAME} INTERFACE -Wa,-mbig-obj)
 endif(MINGW)
 
 if (MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /W2 /WX)
+    #target_compile_options(${PROJECT_NAME} INTERFACE  /W2 /WX)
 else()
-    target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wpedantic)
+    #target_compile_options(${PROJECT_NAME} INTERFACE  -Wall -Wextra -Wpedantic)
 endif()
 
 install(DIRECTORY include/mailxx DESTINATION ${INCLUDE_INSTALL_DIR})

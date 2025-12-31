@@ -20,10 +20,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/codec/base64.hpp>
 #include <mailxx/detail/result.hpp>
 
-namespace mailxx::sasl
-{
-
-namespace detail
+namespace mailxx::detail
 {
 
 /**
@@ -58,7 +55,10 @@ inline result<std::string> base64_encode_single_line(std::string_view input)
     return ok(strip_newlines(*encoded));
 }
 
-} // namespace detail
+} // namespace mailxx::detail
+
+namespace mailxx::sasl
+{
 
 /**
  * Encode credentials for SASL PLAIN mechanism.
@@ -77,7 +77,7 @@ inline result<std::string> encode_plain(std::string_view username, std::string_v
     plain.push_back('\0');
     plain += password;
     
-    return detail::base64_encode_single_line(plain);
+    return ::mailxx::detail::base64_encode_single_line(plain);
 }
 
 /**
@@ -89,7 +89,7 @@ inline result<std::string> encode_plain(std::string_view username, std::string_v
  */
 inline result<std::string> encode_login(std::string_view text)
 {
-    return detail::base64_encode_single_line(text);
+    return ::mailxx::detail::base64_encode_single_line(text);
 }
 
 /**
@@ -111,7 +111,7 @@ inline result<std::string> encode_xoauth2(std::string_view username, std::string
     xoauth2 += access_token;
     xoauth2 += "\x01\x01";
     
-    return detail::base64_encode_single_line(xoauth2);
+    return ::mailxx::detail::base64_encode_single_line(xoauth2);
 }
 
 /**
@@ -132,7 +132,7 @@ inline result<std::string> encode_oauthbearer(std::string_view username, std::st
     bearer += access_token;
     bearer += "\x01\x01";
     
-    return detail::base64_encode_single_line(bearer);
+    return ::mailxx::detail::base64_encode_single_line(bearer);
 }
 
 } // namespace mailxx::sasl

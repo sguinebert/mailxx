@@ -137,7 +137,7 @@ enum class command_kind
     return {};
 }
 
-[[nodiscard]] inline detail::error_detail make_smtp_detail(
+[[nodiscard]] inline mailxx::detail::error_detail make_smtp_detail(
     std::string_view host,
     std::string_view service,
     command_kind k,
@@ -145,13 +145,13 @@ enum class command_kind
     const reply& r,
     std::string_view previous = {})
 {
-    detail::error_detail detail;
+    mailxx::detail::error_detail detail;
     detail.add("proto", "smtp");
     detail.add("host", host);
     detail.add("service", service);
     detail.add("command", command_name(k));
     detail.add("command.line", cmd_line_redacted);
-    detail.add("reply.code", r.status);
+    detail.add_int("reply.code", static_cast<std::uint64_t>(r.status));
     for (std::size_t i = 0; i < r.lines.size(); ++i)
     {
         std::string key = "reply.line";

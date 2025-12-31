@@ -24,8 +24,10 @@ BOOST_AUTO_TEST_CASE(auth_policy_requires_tls)
     opts.require_tls_for_auth = true;
     opts.allow_cleartext_auth = false;
 
-    BOOST_CHECK_THROW(mailxx::detail::ensure_auth_allowed(false, opts), mailxx::net::dialog_error);
-    BOOST_CHECK_NO_THROW(mailxx::detail::ensure_auth_allowed(true, opts));
+    auto res = mailxx::detail::ensure_auth_allowed(false, opts, mailxx::errc::imap_invalid_state);
+    BOOST_TEST(!res.has_value());
+    BOOST_TEST(mailxx::to_string(res.error().code) == "imap_invalid_state");
+    BOOST_TEST(mailxx::detail::ensure_auth_allowed(true, opts, mailxx::errc::imap_invalid_state).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(auth_policy_allows_opt_in)
@@ -34,7 +36,7 @@ BOOST_AUTO_TEST_CASE(auth_policy_allows_opt_in)
     opts.require_tls_for_auth = true;
     opts.allow_cleartext_auth = true;
 
-    BOOST_CHECK_NO_THROW(mailxx::detail::ensure_auth_allowed(false, opts));
+    BOOST_TEST(mailxx::detail::ensure_auth_allowed(false, opts, mailxx::errc::imap_invalid_state).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(auth_policy_disabled)
@@ -43,5 +45,5 @@ BOOST_AUTO_TEST_CASE(auth_policy_disabled)
     opts.require_tls_for_auth = false;
     opts.allow_cleartext_auth = false;
 
-    BOOST_CHECK_NO_THROW(mailxx::detail::ensure_auth_allowed(false, opts));
+    BOOST_TEST(mailxx::detail::ensure_auth_allowed(false, opts, mailxx::errc::imap_invalid_state).has_value());
 }

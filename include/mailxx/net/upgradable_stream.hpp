@@ -5,6 +5,7 @@
 #include <vector>
 #include <utility>
 #include <memory>
+#include <type_traits>
 #include <mailxx/detail/asio_decl.hpp>
 #if defined(__has_include)
 #if __has_include(<asio/ssl/host_name_verification.hpp>)
@@ -39,7 +40,10 @@ namespace net
 {
 
 // Import Asio types from centralized declarations
-using namespace mailxx::asio;
+using mailxx::asio::any_io_executor;
+using mailxx::asio::awaitable;
+using mailxx::asio::tcp;
+namespace ssl = mailxx::asio::ssl;
 
 /**
 Stable stream type that can be upgraded to TLS without changing the type.
@@ -49,7 +53,7 @@ class upgradable_stream
 public:
     using ssl_stream = ssl::stream<tcp::socket>;
     using executor_type = any_io_executor;
-    using lowest_layer_type = tcp::socket;
+    using lowest_layer_type = std::remove_reference_t<decltype(std::declval<ssl_stream&>().lowest_layer())>;
 
     explicit upgradable_stream(tcp::socket socket)
         : stream_(std::move(socket))
@@ -61,12 +65,17 @@ public:
     {
     }
 
+    executor_type get_executor()
+    {
+        return std::visit([](auto& stream) -> executor_type
+        {
+            return executor_type(stream.get_executor());
+        }, stream_);
+    }
+
     executor_type get_executor() const
     {
-        return std::visit([](const auto& stream) -> executor_type
-        {
-            return stream.get_executor();
-        }, stream_);
+        return const_cast<upgradable_stream*>(this)->get_executor();
     }
 
     lowest_layer_type& lowest_layer()
@@ -299,7 +308,7 @@ private:
         out.reserve(pins.size());
         for (const auto& pin : pins)
         {
-            std::string normalized = normalize_fingerprint(pin);
+            std::string normalized = mailxx::net::normalize_fingerprint(pin);
             if (normalized.empty())
                 continue;
             if (!valid_pin_length(normalized.size()))
@@ -377,8 +386,8 @@ private:
         bool matched = false;
         for (const auto& pin : pins)
         {
-            matched |= constant_time_equals(pin, hex);
-            matched |= constant_time_equals(pin, base64);
+            matched |= mailxx::net::constant_time_equals(pin, hex);
+            matched |= mailxx::net::constant_time_equals(pin, base64);
         }
         return matched;
     }

@@ -14,23 +14,12 @@ OAuth2 retry helper for SASL authentication with token refresh.
 #include <utility>
 
 #include <mailxx/detail/asio_decl.hpp>
+#include <mailxx/detail/awaitable_traits.hpp>
 #include <mailxx/detail/result.hpp>
 #include <mailxx/oauth2/token_source.hpp>
 
 namespace mailxx::detail
 {
-
-template<typename Awaitable>
-struct awaitable_value;
-
-template<typename T>
-struct awaitable_value<mailxx::asio::awaitable<T>>
-{
-    using type = T;
-};
-
-template<typename Awaitable>
-using awaitable_value_t = typename awaitable_value<Awaitable>::type;
 
 template<class AuthFn, class RetryPred>
 mailxx::asio::awaitable<awaitable_value_t<decltype(std::declval<AuthFn>()(std::declval<const std::string&>()))>>

@@ -23,6 +23,7 @@ Supports multiple log levels, optional callbacks, and protocol tracing.
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <source_location>
 #include <string>
 #include <string_view>
@@ -271,6 +272,21 @@ private:
 #define MAILXX_WARN(msg)   MAILXX_LOG(::mailxx::log::level::warn, msg)
 #define MAILXX_ERROR(msg)  MAILXX_LOG(::mailxx::log::level::error, msg)
 #define MAILXX_FATAL(msg)  MAILXX_LOG(::mailxx::log::level::fatal, msg)
+
+// Compatibility macros with tagged, stream-style messages.
+#define MAILXX_LOG_WITH_TAG(lvl, tag, stream_expr) \
+    do { \
+        std::ostringstream _mailxx_oss; \
+        _mailxx_oss << "[" << (tag) << "] " << stream_expr; \
+        ::mailxx::log::logger::instance().log(lvl, _mailxx_oss.str(), std::source_location::current()); \
+    } while (0)
+
+#define MAILXX_LOG_TRACE(tag, msg) MAILXX_LOG_WITH_TAG(::mailxx::log::level::trace, tag, msg)
+#define MAILXX_LOG_DEBUG(tag, msg) MAILXX_LOG_WITH_TAG(::mailxx::log::level::debug, tag, msg)
+#define MAILXX_LOG_INFO(tag, msg)  MAILXX_LOG_WITH_TAG(::mailxx::log::level::info, tag, msg)
+#define MAILXX_LOG_WARN(tag, msg)  MAILXX_LOG_WITH_TAG(::mailxx::log::level::warn, tag, msg)
+#define MAILXX_LOG_ERROR(tag, msg) MAILXX_LOG_WITH_TAG(::mailxx::log::level::error, tag, msg)
+#define MAILXX_LOG_FATAL(tag, msg) MAILXX_LOG_WITH_TAG(::mailxx::log::level::fatal, tag, msg)
 
 /// Protocol trace helper
 #define MAILXX_TRACE_SEND(protocol, data) \

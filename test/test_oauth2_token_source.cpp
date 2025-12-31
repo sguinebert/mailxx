@@ -39,7 +39,7 @@ BOOST_AUTO_TEST_CASE(refresh_called_when_expired)
 
     auto res = source.get_access_token();
     BOOST_TEST(calls == 1);
-    BOOST_TEST(res);
+    BOOST_TEST(res.has_value());
     BOOST_TEST(res.value() == "new_access");
 }
 
@@ -59,7 +59,7 @@ BOOST_AUTO_TEST_CASE(refresh_not_called_when_valid)
 
     auto res = source.get_access_token();
     BOOST_TEST(calls == 0);
-    BOOST_TEST(res);
+    BOOST_TEST(res.has_value());
     BOOST_TEST(res.value() == "access");
 }
 
@@ -79,6 +79,6 @@ BOOST_AUTO_TEST_CASE(refresh_error_propagated)
 
     auto res = source.get_access_token();
     BOOST_TEST(calls == 1);
-    BOOST_TEST(!res);
-    BOOST_TEST(res.error().code == mailxx::errc::net_io_failed);
+    BOOST_TEST(!res.has_value());
+    BOOST_TEST(mailxx::to_string(res.error().code) == "net_io_failed");
 }

@@ -33,7 +33,7 @@ namespace mailxx
 
     const errc code = net::map_net_error(stage, ec, timeout_triggered);
 
-    return make_error(code, ec.message(), {}, ec);
+    return make_error(code, ec.message(), std::string{}, ec);
 }
 
 /// Helper to convert asio tuple result to mailxx::result

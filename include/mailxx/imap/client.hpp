@@ -111,8 +111,10 @@ public:
                     "IDLE is not active.",
                     mailxx::imap::make_imap_detail({}, "IDLE", {}, 0, 0));
 
-            auto* dlg = MAILXX_CO_TRY(owner_->dialog_ptr());
-            std::string line = MAILXX_CO_TRY(co_await dlg->read_line_r());
+            dialog_type* dlg = nullptr;
+            MAILXX_CO_TRY_ASSIGN(dlg, owner_->dialog_ptr());
+            std::string line;
+            MAILXX_CO_TRY_ASSIGN(line, co_await dlg->read_line_r());
             co_return mailxx::ok(std::move(line));
         }
 
@@ -125,7 +127,8 @@ public:
                     mailxx::imap::make_imap_detail({}, "IDLE", {}, 0, 0));
 
             client* owner = owner_;
-            auto* dlg = MAILXX_CO_TRY(owner_->dialog_ptr());
+            dialog_type* dlg = nullptr;
+            MAILXX_CO_TRY_ASSIGN(dlg, owner_->dialog_ptr());
             MAILXX_TRY_CO_AWAIT(dlg->write_line_r("DONE"));
 
             response resp;
@@ -133,13 +136,15 @@ public:
 
             while (true)
             {
-                std::string line = MAILXX_CO_TRY(co_await dlg->read_line_r());
+                std::string line;
+                MAILXX_CO_TRY_ASSIGN(line, co_await dlg->read_line_r());
                 client::handle_line(resp, line, tag_);
 
                 std::size_t literal_size = 0;
                 if (client::extract_literal_size(line, literal_size))
                 {
-                    std::string literal = MAILXX_CO_TRY(co_await dlg->read_exactly_r(literal_size));
+                    std::string literal;
+                    MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_size));
                     if (literal.size() != literal_size)
                     {
                         co_return owner_->imap_fail<response>(
@@ -217,13 +222,6 @@ public:
     }
 
     awaitable<result_void> connect(const std::string& host, const std::string& service, mailxx::net::tls_mode mode,
-        ssl::context* tls_ctx = nullptr, std::string sni = {})
-    {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
-        co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
-    }
-
-    awaitable<result_void> connect(std::string host, std::string service, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
@@ -317,13 +315,13 @@ public:
         std::string_view reference, std::string_view pattern)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(reference, "reference"));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(pattern, "pattern"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(reference, "reference"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(pattern, "pattern"));
 
         std::string ref;
+        MAILXX_CO_TRY_ASSIGN(ref, mailxx::imap::to_mailbox(reference));
         std::string pat;
-        MAILXX_TRY_ASSIGN(ref, mailxx::imap::to_mailbox(reference));
-        MAILXX_TRY_ASSIGN(pat, mailxx::imap::to_mailbox(pattern));
+        MAILXX_CO_TRY_ASSIGN(pat, mailxx::imap::to_mailbox(pattern));
 
         std::string cmd;
         mailxx::detail::append_sv(cmd, "LIST");
@@ -332,7 +330,8 @@ public:
         mailxx::detail::append_space(cmd);
         mailxx::detail::append_sv(cmd, pat);
 
-        response resp = MAILXX_CO_TRY(co_await command_impl(cmd));
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         std::vector<mailbox_folder> folders;
         folders.reserve(resp.untagged_lines.size());
         for (const auto& line : resp.untagged_lines)
@@ -348,16 +347,17 @@ public:
     awaitable<result<std::pair<response, mailbox_stat>>> select(std::string_view mailbox)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox"));
 
         std::string box;
-        MAILXX_TRY_ASSIGN(box, mailxx::imap::to_mailbox(mailbox));
+        MAILXX_CO_TRY_ASSIGN(box, mailxx::imap::to_mailbox(mailbox));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "SELECT");
         mailxx::detail::append_space(cmd);
         mailxx::detail::append_sv(cmd, box);
 
-        response resp = MAILXX_CO_TRY(co_await command_impl(cmd));
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         mailbox_stat stat;
         for (const auto& line : resp.untagged_lines)
             parse_mailbox_stat(line, stat);
@@ -367,16 +367,17 @@ public:
     awaitable<result<std::pair<response, mailbox_stat>>> examine(std::string_view mailbox)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox"));
 
         std::string box;
-        MAILXX_TRY_ASSIGN(box, mailxx::imap::to_mailbox(mailbox));
+        MAILXX_CO_TRY_ASSIGN(box, mailxx::imap::to_mailbox(mailbox));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "EXAMINE");
         mailxx::detail::append_space(cmd);
         mailxx::detail::append_sv(cmd, box);
 
-        response resp = MAILXX_CO_TRY(co_await command_impl(cmd));
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         mailbox_stat stat;
         for (const auto& line : resp.untagged_lines)
             parse_mailbox_stat(line, stat);
@@ -387,7 +388,7 @@ public:
         std::string_view criteria, bool uid = false)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(criteria, "criteria"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(criteria, "criteria"));
 
         std::string cmd;
         if (uid)
@@ -400,7 +401,8 @@ public:
             mailxx::detail::append_sv(cmd, criteria);
         }
 
-        response resp = MAILXX_CO_TRY(co_await command_impl(cmd));
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         std::vector<std::uint32_t> ids;
         for (const auto& line : resp.untagged_lines)
         {
@@ -415,7 +417,7 @@ public:
     awaitable<result<std::vector<std::uint32_t>>> uid_search(std::string_view criteria)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(criteria, "criteria"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(criteria, "criteria"));
 
         std::string cmd;
         mailxx::detail::append_sv(cmd, "UID SEARCH");
@@ -425,7 +427,8 @@ public:
             mailxx::detail::append_sv(cmd, criteria);
         }
 
-        response resp = MAILXX_CO_TRY(co_await command_impl(cmd));
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         std::vector<std::uint32_t> ids;
         for (const auto& line : resp.untagged_lines)
         {
@@ -447,17 +450,18 @@ public:
         mailxx::detail::append_space(cmd);
         mailxx::detail::append_sv(cmd, "(RFC822)");
 
-        response resp = MAILXX_CO_TRY(co_await command_impl(cmd));
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         std::string raw = select_fetch_literal(resp, "RFC822");
         mailxx::message msg;
-        MAILXX_TRY_ASSIGN(msg, mailxx::message::parse_result(raw));
+        MAILXX_CO_TRY_ASSIGN(msg, mailxx::message::parse_result(raw));
         co_return mailxx::ok(std::move(msg));
     }
 
     awaitable<result<std::string>> uid_fetch_body(std::uint32_t uid, std::string_view section)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(section, "section"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(section, "section"));
 
         std::string cmd;
         mailxx::detail::append_sv(cmd, "UID FETCH");
@@ -468,15 +472,16 @@ public:
         mailxx::detail::append_sv(cmd, section);
         mailxx::detail::append_char(cmd, ')');
 
-        response resp = MAILXX_CO_TRY(co_await command_impl(cmd));
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         co_return mailxx::ok(select_fetch_literal(resp, "BODY["));
     }
 
     awaitable<result<response>> fetch(std::string_view seq_set, std::string_view items, bool uid = false)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(seq_set, "seq_set"));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(items, "items"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(seq_set, "seq_set"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(items, "items"));
 
         std::string cmd;
         if (uid)
@@ -495,10 +500,10 @@ public:
         std::string_view mode, bool uid = false)
     {
         [[maybe_unused]] auto guard = co_await mutex_.lock();
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(seq_set, "seq_set"));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(item_name, "item_name"));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(value, "value"));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(mode, "mode"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(seq_set, "seq_set"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(item_name, "item_name"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(value, "value"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(mode, "mode"));
 
         std::string cmd;
         if (uid)
@@ -540,10 +545,12 @@ public:
         mailxx::detail::append_space(line);
         mailxx::detail::append_sv(line, "IDLE");
 
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
         MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
 
-        std::string reply_line = MAILXX_CO_TRY(co_await dlg->read_line_r());
+        std::string reply_line;
+        MAILXX_CO_TRY_ASSIGN(reply_line, co_await dlg->read_line_r());
         if (!reply_line.empty() && reply_line[0] == '+')
             co_return mailxx::ok(idle_session(this, std::move(lock), std::move(tag), true));
 
@@ -731,8 +738,8 @@ private:
                 mailxx::errc::imap_invalid_state,
                 "Connection is already established.",
                 imap_detail({}, "CONNECT", {}, 0, 0));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(host, "host"));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(service, "service"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(host, "host"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(service, "service"));
         remote_host_ = host;
 
         tcp::resolver resolver(executor_);
@@ -755,7 +762,8 @@ private:
                     mailxx::errc::imap_invalid_state,
                     "TLS context is required.",
                     imap_detail({}, "CONNECT", "Implicit TLS needs a context.", 0, 0));
-            std::string resolved_sni = MAILXX_CO_TRY(resolve_sni(host, std::move(sni)));
+            std::string resolved_sni;
+            MAILXX_CO_TRY_ASSIGN(resolved_sni, resolve_sni(host, std::move(sni)));
             MAILXX_TRY_CO_AWAIT(start_tls_stream(stream, *tls_ctx, std::move(resolved_sni)));
         }
 
@@ -782,14 +790,17 @@ private:
     awaitable<result<response>> read_greeting_impl()
     {
         response resp;
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
-        std::string line = MAILXX_CO_TRY(co_await dlg->read_line_r());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
+        std::string line;
+        MAILXX_CO_TRY_ASSIGN(line, co_await dlg->read_line_r());
         handle_line(resp, line, std::string_view{});
         update_literal_plus_from_line(line);
         std::size_t literal_size = 0;
         if (extract_literal_size(line, literal_size))
         {
-            std::string literal = MAILXX_CO_TRY(co_await dlg->read_exactly_r(literal_size));
+            std::string literal;
+            MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_size));
             if (literal.size() != literal_size)
             {
                 co_return imap_fail<response>(
@@ -807,14 +818,15 @@ private:
 
     awaitable<result<response>> login_impl(std::string_view username, std::string_view password)
     {
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
         MAILXX_CO_TRY_VOID(enforce_auth_tls_policy(*dlg));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(username, "username"));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(password, "password"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(username, "username"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(password, "password"));
         std::string user;
+        MAILXX_CO_TRY_ASSIGN(user, mailxx::imap::to_astring(username));
         std::string pass;
-        MAILXX_TRY_ASSIGN(user, mailxx::imap::to_astring(username));
-        MAILXX_TRY_ASSIGN(pass, mailxx::imap::to_astring(password));
+        MAILXX_CO_TRY_ASSIGN(pass, mailxx::imap::to_astring(password));
         std::string cmd;
         mailxx::detail::append_sv(cmd, "LOGIN");
         mailxx::detail::append_space(cmd);
@@ -826,7 +838,8 @@ private:
 
     awaitable<result<response>> capability_impl()
     {
-        response resp = MAILXX_CO_TRY(co_await command_impl("CAPABILITY"));
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl("CAPABILITY"));
         update_literal_plus(resp);
         parse_capabilities(resp);
         capabilities_known_ = true;
@@ -835,8 +848,8 @@ private:
 
     awaitable<result<response>> authenticate_impl(credentials cred, auth_method method)
     {
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(cred.username, "username"));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(cred.secret, "secret"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(cred.username, "username"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(cred.secret, "secret"));
 
         if (!capabilities_known_
             && (method == auth_method::auto_detect || method == auth_method::plain || method == auth_method::xoauth2))
@@ -865,7 +878,8 @@ private:
 
     awaitable<result<response>> authenticate_plain_impl(const credentials& cred)
     {
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
         MAILXX_CO_TRY_VOID(enforce_auth_tls_policy(*dlg));
         auto encoded_res = mailxx::sasl::encode_plain(cred.username, cred.secret);
         if (!encoded_res)
@@ -876,7 +890,7 @@ private:
                 format_codec_error(encoded_res.error()));
         }
         std::string encoded = std::move(*encoded_res);
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(encoded, "sasl_plain"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(encoded, "sasl_plain"));
 
         if (capabilities_.sasl_ir)
         {
@@ -892,7 +906,8 @@ private:
 
     awaitable<result<response>> authenticate_xoauth2_impl(const credentials& cred)
     {
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
         MAILXX_CO_TRY_VOID(enforce_auth_tls_policy(*dlg));
         auto encoded_res = mailxx::sasl::encode_xoauth2(cred.username, cred.secret);
         if (!encoded_res)
@@ -903,7 +918,7 @@ private:
                 format_codec_error(encoded_res.error()));
         }
         std::string encoded = std::move(*encoded_res);
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(encoded, "sasl_xoauth2"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(encoded, "sasl_xoauth2"));
 
         if (capabilities_.sasl_ir)
         {
@@ -921,14 +936,16 @@ private:
     {
         MAILXX_TRY_CO_AWAIT(command_impl("STARTTLS"));
 
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
         const std::size_t max_len = dlg->max_line_length();
         const auto timeout = dlg->timeout();
 
         mailxx::net::upgradable_stream stream = std::move(dlg->stream());
         dialog_.reset();
 
-        std::string resolved_sni = MAILXX_CO_TRY(resolve_sni(remote_host_, std::move(sni)));
+        std::string resolved_sni;
+        MAILXX_CO_TRY_ASSIGN(resolved_sni, resolve_sni(remote_host_, std::move(sni)));
         MAILXX_TRY_CO_AWAIT(start_tls_stream(stream, context, std::move(resolved_sni)));
 
         dialog_.emplace(std::move(stream), max_len, timeout);
@@ -948,7 +965,7 @@ private:
 
     awaitable<result<response>> command_impl(std::string_view cmd)
     {
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(cmd, "command"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(cmd, "command"));
 
         std::string tag = std::to_string(++tag_counter_);
 
@@ -959,9 +976,11 @@ private:
             mailxx::detail::append_sv(line, cmd);
         }
 
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
         MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
-        response resp = MAILXX_CO_TRY(co_await read_response_impl(*dlg, tag, cmd));
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await read_response_impl(*dlg, tag, cmd));
         co_return finalize_response(std::move(resp), cmd);
     }
 
@@ -993,8 +1012,8 @@ private:
     awaitable<result<response>> command_with_one_continuation(
         std::string_view cmd, std::string_view continuation_line)
     {
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(cmd, "command"));
-        MAILXX_TRY(mailxx::detail::ensure_no_crlf_or_nul(continuation_line, "continuation"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(cmd, "command"));
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(continuation_line, "continuation"));
 
         std::string tag = std::to_string(++tag_counter_);
 
@@ -1005,7 +1024,8 @@ private:
             mailxx::detail::append_sv(line, cmd);
         }
 
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
         MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
 
         response resp;
@@ -1014,13 +1034,15 @@ private:
         bool continuation_sent = false;
         while (true)
         {
-            std::string resp_line = MAILXX_CO_TRY(co_await dlg->read_line_r());
+            std::string resp_line;
+            MAILXX_CO_TRY_ASSIGN(resp_line, co_await dlg->read_line_r());
             handle_line(resp, resp_line, tag);
 
             std::size_t literal_size = 0;
             if (extract_literal_size(resp_line, literal_size))
             {
-                std::string literal = MAILXX_CO_TRY(co_await dlg->read_exactly_r(literal_size));
+                std::string literal;
+                MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_size));
                 if (literal.size() != literal_size)
                 {
                     co_return imap_fail<response>(
@@ -1093,7 +1115,7 @@ private:
     {
         const bool use_literal_plus = literal_plus_.has_value() && *literal_plus_;
         std::string cmd;
-        MAILXX_TRY_ASSIGN(cmd, mailxx::imap::detail::build_append_command(
+        MAILXX_CO_TRY_ASSIGN(cmd, mailxx::imap::detail::build_append_command(
             mailbox, data.size(), flags, date_time, use_literal_plus));
 
         std::string tag = std::to_string(++tag_counter_);
@@ -1101,7 +1123,8 @@ private:
         mailxx::detail::append_space(line);
         mailxx::detail::append_sv(line, cmd);
 
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
         MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
 
         response resp;
@@ -1112,12 +1135,14 @@ private:
             bool got_continuation = false;
             while (true)
             {
-                std::string resp_line = MAILXX_CO_TRY(co_await dlg->read_line_r());
+                std::string resp_line;
+                MAILXX_CO_TRY_ASSIGN(resp_line, co_await dlg->read_line_r());
                 handle_line(resp, resp_line, tag);
                 std::size_t literal_size = 0;
                 if (extract_literal_size(resp_line, literal_size))
                 {
-                    std::string literal = MAILXX_CO_TRY(co_await dlg->read_exactly_r(literal_size));
+                    std::string literal;
+                    MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_size));
                     if (literal.size() != literal_size)
                     {
                         co_return imap_fail<response>(
@@ -1197,7 +1222,7 @@ private:
         co_return finalize_response(std::move(resp), cmd);
     }
 
-    class counting_sink : public detail::output_sink
+    class counting_sink : public mailxx::detail::output_sink
     {
     public:
         void write(std::string_view chunk) override { size_ += chunk.size(); }
@@ -1280,7 +1305,7 @@ private:
         std::string error_msg_;
     };
 
-    class streaming_sink : public detail::output_sink
+    class streaming_sink : public mailxx::detail::output_sink
     {
     public:
         streaming_sink(streaming_queue* queue, std::size_t flush_threshold = 8192)
@@ -1328,7 +1353,7 @@ private:
 
         const bool use_literal_plus = literal_plus_.has_value() && *literal_plus_;
         std::string cmd;
-        MAILXX_TRY_ASSIGN(cmd, mailxx::imap::detail::build_append_command(
+        MAILXX_CO_TRY_ASSIGN(cmd, mailxx::imap::detail::build_append_command(
             mailbox, literal_size, flags, date_time, use_literal_plus));
 
         std::string tag = std::to_string(++tag_counter_);
@@ -1336,7 +1361,8 @@ private:
         mailxx::detail::append_space(line);
         mailxx::detail::append_sv(line, cmd);
 
-        auto* dlg = MAILXX_CO_TRY(dialog_ptr());
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
         MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
 
         response resp;
@@ -1346,7 +1372,8 @@ private:
         {
             while (true)
             {
-                std::string resp_line = MAILXX_CO_TRY(co_await dlg->read_line_r());
+                std::string resp_line;
+                MAILXX_CO_TRY_ASSIGN(resp_line, co_await dlg->read_line_r());
                 handle_line(resp, resp_line, tag);
                 update_literal_plus_from_line(resp_line);
                 if (!resp_line.empty() && resp_line[0] == '+')
@@ -1414,13 +1441,15 @@ private:
 
         while (true)
         {
-            std::string resp_line = MAILXX_CO_TRY(co_await dlg->read_line_r());
+            std::string resp_line;
+            MAILXX_CO_TRY_ASSIGN(resp_line, co_await dlg->read_line_r());
             handle_line(resp, resp_line, tag);
             update_literal_plus_from_line(resp_line);
             std::size_t literal_resp = 0;
             if (extract_literal_size(resp_line, literal_resp))
             {
-                std::string literal = MAILXX_CO_TRY(co_await dlg->read_exactly_r(literal_resp));
+                std::string literal;
+                MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_resp));
                 if (literal.size() != literal_resp)
                 {
                     co_return imap_fail<response>(
@@ -1454,13 +1483,15 @@ private:
     {
         while (true)
         {
-            std::string line = MAILXX_CO_TRY(co_await dlg.read_line_r());
+            std::string line;
+            MAILXX_CO_TRY_ASSIGN(line, co_await dlg.read_line_r());
             handle_line(resp, line, tag);
 
             std::size_t literal_size = 0;
             if (extract_literal_size(line, literal_size))
             {
-                std::string literal = MAILXX_CO_TRY(co_await dlg.read_exactly_r(literal_size));
+                std::string literal;
+                MAILXX_CO_TRY_ASSIGN(literal, co_await dlg.read_exactly_r(literal_size));
                 if (literal.size() != literal_size)
                 {
                     co_return imap_fail<void>(
