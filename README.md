@@ -12,7 +12,7 @@
 ## ✨ Key Features
 
 - **Header-only**: No compilation required, just include and use
-- **Modern C++23**: Leverages coroutines, concepts, ranges, and std::expected
+- **Modern C++23**: Leverages coroutines and std::expected
 - **Async/Await**: Native coroutine support with `co_await` for non-blocking I/O
 - **Connection Pooling**: Built-in connection pool with automatic reconnection
 - **Rate Limiting**: Token bucket algorithm for API rate limiting
