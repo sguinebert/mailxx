@@ -15,7 +15,6 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 
 #include <string>
 #include <string_view>
-#include <stdexcept>
 #include <memory>
 #include <optional>
 #include <chrono>
@@ -68,23 +67,6 @@ inline constexpr std::size_t DEFAULT_MAX_LINE_LENGTH = 8192;
 
 /// Absolute maximum line length to prevent excessive memory allocation (1 MB)
 inline constexpr std::size_t MAX_ALLOWED_LINE_LENGTH = 1024 * 1024;
-
-class dialog_error : public std::runtime_error
-{
-public:
-    dialog_error(const std::string& msg, const std::string& details) : std::runtime_error(msg), details_(details)
-    {
-    }
-
-    dialog_error(const char* msg, const std::string& details) : std::runtime_error(msg), details_(details)
-    {
-    }
-
-    std::string details() const { return details_; }
-
-protected:
-    std::string details_;
-};
 
 /**
 Dealing with network in a line oriented fashion.

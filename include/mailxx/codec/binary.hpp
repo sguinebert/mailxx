@@ -16,7 +16,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <string>
 #include <vector>
 #include <mailxx/codec/codec.hpp>
-#include <mailxx/export.hpp>
+#include <mailxx/config.hpp>
 
 
 namespace mailxx

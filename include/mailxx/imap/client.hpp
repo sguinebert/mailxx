@@ -40,7 +40,6 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/detail/sanitize.hpp>
 #include <mailxx/detail/output_sink.hpp>
 #include <mailxx/oauth2/token_source.hpp>
-#include <mailxx/imap/error.hpp>
 #include <mailxx/imap/error_mapping.hpp>
 #include <mailxx/imap/types.hpp>
 #include <mailxx/mime/message.hpp>
@@ -204,63 +203,73 @@ public:
 
     awaitable<result_void> connect(const std::string& host, unsigned short port)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await connect_impl(host, std::to_string(port), mailxx::net::tls_mode::none, nullptr, {});
     }
 
     awaitable<result_void> connect(const std::string& host, const std::string& service)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await connect_impl(host, service, mailxx::net::tls_mode::none, nullptr, {});
     }
 
     awaitable<result_void> connect(const std::string& host, unsigned short port, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await connect_impl(host, std::to_string(port), mode, tls_ctx, std::move(sni));
     }
 
     awaitable<result_void> connect(const std::string& host, const std::string& service, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
     }
 
     awaitable<result<response>> read_greeting()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await read_greeting_impl();
     }
 
     awaitable<result<response>> command(std::string_view cmd)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await command_impl(cmd);
     }
 
     awaitable<result<response>> capability()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await capability_impl();
     }
 
     awaitable<result<response>> login(std::string_view username, std::string_view password)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await login_impl(username, password);
     }
 
     awaitable<result<response>> authenticate(credentials cred, auth_method method)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await authenticate_impl(std::move(cred), method);
     }
 
     awaitable<result<response>> authenticate(credentials cred, mailxx::oauth2::token_source& source)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         std::string username = std::move(cred.username);
         auto auth = [&](const std::string& token) -> awaitable<result<response>>
         {
@@ -276,22 +285,25 @@ public:
 
     awaitable<result<response>> logout()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await command_impl("LOGOUT");
     }
 
     awaitable<result<response>> noop()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await command_impl("NOOP");
     }
 
     awaitable<result<response>> append(std::string_view mailbox, const mailxx::message& msg,
         std::string_view flags = {}, std::string_view date_time = {})
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         std::string payload;
-        auto fmt_res = msg.format_result(payload);
+        auto fmt_res = msg.format(payload);
         if (!fmt_res)
             co_return mailxx::fail<response>(std::move(fmt_res).error());
         co_return co_await append_raw_impl(mailbox, payload, flags, date_time);
@@ -300,21 +312,24 @@ public:
     awaitable<result<response>> append_streaming(std::string_view mailbox, const mailxx::message& msg,
         std::string_view flags = {}, std::string_view date_time = {})
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await append_streaming_impl(mailbox, msg, flags, date_time);
     }
 
     awaitable<result<response>> append_raw(std::string_view mailbox, std::string_view data,
         std::string_view flags = {}, std::string_view date_time = {})
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await append_raw_impl(mailbox, data, flags, date_time);
     }
 
     awaitable<result<std::pair<response, std::vector<mailbox_folder>>>> list(
         std::string_view reference, std::string_view pattern)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(reference, "reference"));
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(pattern, "pattern"));
 
@@ -346,7 +361,8 @@ public:
 
     awaitable<result<std::pair<response, mailbox_stat>>> select(std::string_view mailbox)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox"));
 
         std::string box;
@@ -366,7 +382,8 @@ public:
 
     awaitable<result<std::pair<response, mailbox_stat>>> examine(std::string_view mailbox)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox"));
 
         std::string box;
@@ -387,7 +404,8 @@ public:
     awaitable<result<std::pair<response, std::vector<std::uint32_t>>>> search(
         std::string_view criteria, bool uid = false)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(criteria, "criteria"));
 
         std::string cmd;
@@ -416,7 +434,8 @@ public:
 
     awaitable<result<std::vector<std::uint32_t>>> uid_search(std::string_view criteria)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(criteria, "criteria"));
 
         std::string cmd;
@@ -442,7 +461,8 @@ public:
 
     awaitable<result<mailxx::message>> uid_fetch_rfc822(std::uint32_t uid)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         std::string cmd;
         mailxx::detail::append_sv(cmd, "UID FETCH");
         mailxx::detail::append_space(cmd);
@@ -454,13 +474,14 @@ public:
         MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         std::string raw = select_fetch_literal(resp, "RFC822");
         mailxx::message msg;
-        MAILXX_CO_TRY_ASSIGN(msg, mailxx::message::parse_result(raw));
+        MAILXX_CO_TRY_VOID(msg.parse(raw));
         co_return mailxx::ok(std::move(msg));
     }
 
     awaitable<result<std::string>> uid_fetch_body(std::uint32_t uid, std::string_view section)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(section, "section"));
 
         std::string cmd;
@@ -479,7 +500,8 @@ public:
 
     awaitable<result<response>> fetch(std::string_view seq_set, std::string_view items, bool uid = false)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(seq_set, "seq_set"));
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(items, "items"));
 
@@ -499,7 +521,8 @@ public:
     awaitable<result<response>> store(std::string_view seq_set, std::string_view item_name, std::string_view value,
         std::string_view mode, bool uid = false)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(seq_set, "seq_set"));
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(item_name, "item_name"));
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(value, "value"));
@@ -526,19 +549,22 @@ public:
 
     awaitable<result<response>> close()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await command_impl("CLOSE");
     }
 
     awaitable<result_void> start_tls(ssl::context& context, std::string sni = {})
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await start_tls_impl(context, std::move(sni));
     }
 
     awaitable<result<idle_session>> idle_start()
     {
-        auto lock = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock lock;
+        MAILXX_CO_TRY_ASSIGN(lock, co_await mutex_.lock());
 
         std::string tag = std::to_string(++tag_counter_);
         std::string line = tag;
@@ -1346,7 +1372,7 @@ private:
         message_format_options_t fmt_opts;
         fmt_opts.dot_escape = false;
         fmt_opts.add_bcc_header = false;
-        auto fmt_res = msg.format_to_result(cnt_sink, fmt_opts);
+        auto fmt_res = msg.format_to(cnt_sink, fmt_opts);
         if (!fmt_res)
             co_return mailxx::fail<response>(std::move(fmt_res).error());
         const std::size_t literal_size = cnt_sink.size();
@@ -1393,24 +1419,15 @@ private:
 
         streaming_queue queue;
         streaming_sink data_sink(&queue);
-        std::exception_ptr producer_error;
         std::thread producer([&, fmt_opts] {
-            try
+            auto res = msg.format_to(data_sink, fmt_opts);
+            if (!res)
             {
-                auto res = msg.format_to_result(data_sink, fmt_opts);
-                if (!res)
-                {
-                    queue.set_error(res.error().message);
-                    return;
-                }
-                data_sink.finalize();
-                queue.set_done();
+                queue.set_error(res.error().message);
+                return;
             }
-            catch (...)
-            {
-                producer_error = std::current_exception();
-                queue.set_error("format exception");
-            }
+            data_sink.finalize();
+            queue.set_done();
         });
 
         std::string chunk;
@@ -1428,14 +1445,6 @@ private:
         queue.set_done();
         if (producer.joinable())
             producer.join();
-        if (producer_error)
-        {
-            try { std::rethrow_exception(producer_error); }
-            catch (const std::exception& exc)
-            {
-                co_return fail<response>(errc::imap_tagged_bad, "mime format error", exc.what());
-            }
-        }
         if (queue.has_error())
             co_return fail<response>(errc::imap_tagged_bad, "mime format error", queue.error_msg());
 

@@ -26,7 +26,6 @@ module;
 #include <mutex>
 #include <variant>
 #include <span>
-#include <stdexcept>
 #include <chrono>
 #include <tuple>
 #include <boost/asio.hpp>
@@ -39,5 +38,7 @@ export import mailxx.smtp;
 
 // Export pool headers
 export {
-    #include <mailxx/pool.hpp>
+    #include <mailxx/pool/pool_config.hpp>
+    #include <mailxx/pool/connection_pool.hpp>
+    #include <mailxx/pool/smtp_pool.hpp>
 }

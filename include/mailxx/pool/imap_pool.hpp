@@ -16,10 +16,14 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #error "mailxx::pool::imap_pool is experimental and depends on legacy IMAP. Define MAILXX_ENABLE_EXPERIMENTAL_POOL to enable it (legacy IMAP required)."
 #else
 
+#include <cstdint>
 #include <memory>
-#include <string>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 #include <mailxx/detail/asio_decl.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/pool/connection_pool.hpp>
 #include <mailxx/pool/pool_config.hpp>
 #include <mailxx/imap/client.hpp>
@@ -60,9 +64,8 @@ using namespace mailxx::asio;
 class imap_pool
 {
 public:
-    // IMAP client with TLS stream
-    using stream_type = ssl::stream<mailxx::net::upgradable_stream>;
-    using client_type = mailxx::imap_client<stream_type>;
+    // IMAP client type
+    using client_type = mailxx::imap::client;
     using pool_type = connection_pool<client_type>;
     using pooled_type = pooled_connection<client_type>;
     
@@ -86,11 +89,11 @@ public:
      * @param credentials Authentication credentials
      * @param auth_method Authentication method
      */
-    void configure(
+    mailxx::result_void configure(
         pool_endpoint endpoint,
         ssl::context& tls_ctx,
         pool_credentials credentials,
-        mailxx::imap_base::auth_method_t auth_method = mailxx::imap_base::auth_method_t::LOGIN)
+        mailxx::imap::auth_method auth_method = mailxx::imap::auth_method::login)
     {
         endpoint_ = std::move(endpoint);
         tls_ctx_ = &tls_ctx;
@@ -101,54 +104,56 @@ public:
         pool_ = std::make_shared<pool_type>(
             executor_,
             config_,
-            [this]() -> awaitable<std::unique_ptr<client_type>> {
+            [this]() -> awaitable<mailxx::result<std::unique_ptr<client_type>>> {
                 co_return co_await create_client();
             }
         );
         
         // Set validator (NOOP to check connection is alive)
-        pool_->set_validator([](client_type& client) -> awaitable<bool> {
-            try
-            {
-                auto response = co_await client.noop();
-                co_return response.ok();
-            }
-            catch (...)
-            {
-                co_return false;
-            }
+        pool_->set_validator([](client_type& client) -> awaitable<mailxx::result<bool>> {
+            auto response = co_await client.noop();
+            if (!response)
+                co_return mailxx::fail<bool>(std::move(response).error());
+            co_return mailxx::ok(response->ok());
         });
+
+        return mailxx::ok();
     }
     
     /**
      * Convenience configure with separate parameters.
      */
-    void configure(
+    mailxx::result_void configure(
         const std::string& host,
         const std::string& service,
         ssl::context& tls_ctx,
         pool_credentials credentials,
-        mailxx::imap_base::auth_method_t auth_method = mailxx::imap_base::auth_method_t::LOGIN)
+        mailxx::imap::auth_method auth_method = mailxx::imap::auth_method::login)
     {
-        configure(pool_endpoint{host, service, true}, tls_ctx, std::move(credentials), auth_method);
+        return configure(pool_endpoint{host, service, true}, tls_ctx, std::move(credentials), auth_method);
     }
     
     /**
      * Pre-create connections.
      */
-    awaitable<void> warmup()
+    awaitable<mailxx::result_void> warmup()
     {
-        ensure_configured();
-        co_await pool_->warmup();
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return ready;
+        MAILXX_TRY_CO_AWAIT(pool_->warmup());
+        co_return mailxx::ok();
     }
     
     /**
      * Acquire a connection from the pool.
      * Connection is not selected into any mailbox.
      */
-    awaitable<pooled_type> acquire()
+    awaitable<mailxx::result<pooled_type>> acquire()
     {
-        ensure_configured();
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return mailxx::fail<pooled_type>(std::move(ready).error());
         co_return co_await pool_->acquire();
     }
     
@@ -158,23 +163,26 @@ public:
      * @param mailbox Mailbox to select (e.g., "INBOX")
      * @return Pair of (pooled connection, mailbox stats)
      */
-    awaitable<std::pair<pooled_type, mailxx::imap_base::mailbox_stat_t>> 
+    awaitable<mailxx::result<std::pair<pooled_type, mailxx::imap::mailbox_stat>>>
     acquire_with_select(const std::string& mailbox)
     {
-        ensure_configured();
-        
-        auto conn = co_await pool_->acquire();
-        
-        try
-        {
-            auto [response, stat] = co_await conn->select(mailbox);
-            co_return std::make_pair(std::move(conn), std::move(stat));
-        }
-        catch (...)
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return mailxx::fail<std::pair<pooled_type, mailxx::imap::mailbox_stat>>(std::move(ready).error());
+
+        pooled_type conn;
+        MAILXX_CO_TRY_ASSIGN(conn, co_await pool_->acquire());
+
+        auto sel_res = co_await conn->select(mailbox);
+        if (!sel_res)
         {
             conn.invalidate();
-            throw;
+            co_return mailxx::fail<std::pair<pooled_type, mailxx::imap::mailbox_stat>>(std::move(sel_res).error());
         }
+
+        auto [response, stat] = std::move(*sel_res);
+        (void)response;
+        co_return mailxx::ok(std::make_pair(std::move(conn), std::move(stat)));
     }
     
     /**
@@ -184,61 +192,85 @@ public:
      * @param sequence Message sequence or UID range
      * @param items Items to fetch
      * @param uid Use UIDs instead of sequence numbers
-     * @return Fetch response
+     * @return Result containing the fetch response
      */
-    awaitable<mailxx::imap_base::response_t> fetch(
+    awaitable<mailxx::result<mailxx::imap::response>> fetch(
         const std::string& mailbox,
         const std::string& sequence,
         const std::string& items,
         bool uid = false)
     {
-        auto conn = co_await acquire();
-        
-        try
-        {
-            co_await conn->select(mailbox);
-            auto response = co_await conn->fetch(sequence, items, uid);
-            co_return response;
-        }
-        catch (...)
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return mailxx::fail<mailxx::imap::response>(std::move(ready).error());
+
+        pooled_type conn;
+        MAILXX_CO_TRY_ASSIGN(conn, co_await pool_->acquire());
+
+        auto sel_res = co_await conn->select(mailbox);
+        if (!sel_res)
         {
             conn.invalidate();
-            throw;
+            co_return mailxx::fail<mailxx::imap::response>(std::move(sel_res).error());
         }
+
+        auto fetch_res = co_await conn->fetch(sequence, items, uid);
+        if (!fetch_res)
+        {
+            conn.invalidate();
+            co_return mailxx::fail<mailxx::imap::response>(std::move(fetch_res).error());
+        }
+
+        co_return mailxx::ok(std::move(*fetch_res));
     }
     
     /**
      * Search for messages using a pooled connection.
+     *
+     * @param mailbox Mailbox to select
+     * @param criteria Search criteria (IMAP SEARCH syntax)
+     * @param uid Use UIDs instead of sequence numbers
+     * @return Result containing matched message ids
      */
-    awaitable<std::vector<unsigned long>> search(
+    awaitable<mailxx::result<std::vector<std::uint32_t>>> search(
         const std::string& mailbox,
-        const std::list<mailxx::imap_base::search_condition_t>& conditions,
+        std::string_view criteria,
         bool uid = false)
     {
-        auto conn = co_await acquire();
-        
-        try
-        {
-            co_await conn->select(mailbox);
-            auto [response, results] = co_await conn->search(conditions, uid);
-            co_return results;
-        }
-        catch (...)
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return mailxx::fail<std::vector<std::uint32_t>>(std::move(ready).error());
+
+        pooled_type conn;
+        MAILXX_CO_TRY_ASSIGN(conn, co_await pool_->acquire());
+
+        auto sel_res = co_await conn->select(mailbox);
+        if (!sel_res)
         {
             conn.invalidate();
-            throw;
+            co_return mailxx::fail<std::vector<std::uint32_t>>(std::move(sel_res).error());
         }
+
+        auto search_res = co_await conn->search(criteria, uid);
+        if (!search_res)
+        {
+            conn.invalidate();
+            co_return mailxx::fail<std::vector<std::uint32_t>>(std::move(search_res).error());
+        }
+
+        auto [response, results] = std::move(*search_res);
+        (void)response;
+        co_return mailxx::ok(std::move(results));
     }
     
     /**
      * Drain all connections.
      */
-    awaitable<void> drain()
+    awaitable<mailxx::result_void> drain()
     {
-        if (pool_)
-        {
-            co_await pool_->drain();
-        }
+        if (!pool_)
+            co_return mailxx::ok();
+        co_return co_await pool_->drain();
     }
     
     /**
@@ -274,41 +306,31 @@ public:
     }
 
 private:
-    void ensure_configured() const
+    mailxx::result_void ensure_configured() const
     {
         if (!pool_)
-            throw pool_error("IMAP pool not configured. Call configure() first.");
+            return mailxx::fail_void(errc::pool_invalid_state, "IMAP pool not configured. Call configure() first.");
+        return mailxx::ok();
     }
     
-    awaitable<std::unique_ptr<client_type>> create_client()
+    awaitable<mailxx::result<std::unique_ptr<client_type>>> create_client()
     {
-        // Create upgradable stream and upgrade to TLS
-        mailxx::net::upgradable_stream base_stream(executor_);
-        
-        // Resolve and connect
-        tcp::resolver resolver(executor_);
-        auto endpoints = co_await resolver.async_resolve(
-            endpoint_.host, endpoint_.service, use_awaitable);
-        co_await async_connect(base_stream.lowest_layer(), endpoints, use_awaitable);
-        
-        // Upgrade to TLS
+        auto client = std::make_unique<client_type>(executor_);
+
+        auto tls_mode = endpoint_.use_tls ? mailxx::net::tls_mode::implicit : mailxx::net::tls_mode::none;
+        ssl::context* tls_ctx = endpoint_.use_tls ? tls_ctx_ : nullptr;
         const std::string sni = endpoint_.tls_sni.empty() ? endpoint_.host : endpoint_.tls_sni;
-        co_await base_stream.start_tls(*tls_ctx_, sni);
-        
-        // Create IMAP client with TLS stream
-        // Note: The client takes ownership of the dialog/stream
-        mailxx::net::dialog<mailxx::net::upgradable_stream> dlg(std::move(base_stream));
-        
-        // We need to create the client differently - IMAP client expects the stream
-        // For now, we'll create a simplified version
-        // This is a placeholder - actual implementation depends on imap_client structure
-        
-        throw pool_error("IMAP pool client creation not fully implemented - requires imap_client refactoring");
-        
-        // auto client = std::make_unique<client_type>(std::move(dlg));
-        // co_await client->read_greeting();
-        // co_await client->authenticate(credentials_.username, credentials_.password, auth_method_);
-        // co_return client;
+
+        MAILXX_TRY_CO_AWAIT(client->connect(endpoint_.host, endpoint_.service, tls_mode, tls_ctx, sni));
+        MAILXX_TRY_CO_AWAIT(client->read_greeting());
+
+        if (!credentials_.empty())
+        {
+            mailxx::imap::credentials cred{credentials_.username, credentials_.password};
+            MAILXX_TRY_CO_AWAIT(client->authenticate(std::move(cred), auth_method_));
+        }
+
+        co_return mailxx::ok(std::move(client));
     }
     
     any_io_executor executor_;
@@ -317,7 +339,7 @@ private:
     pool_endpoint endpoint_;
     ssl::context* tls_ctx_ = nullptr;
     pool_credentials credentials_;
-    mailxx::imap_base::auth_method_t auth_method_ = mailxx::imap_base::auth_method_t::LOGIN;
+    mailxx::imap::auth_method auth_method_ = mailxx::imap::auth_method::login;
     
     std::shared_ptr<pool_type> pool_;
 };

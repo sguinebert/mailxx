@@ -52,8 +52,8 @@ cases, no callback/future wrappers, and consistent error handling via `result<T>
 
 If you need to drive it from callback-based code, you can bridge with `co_spawn` and invoke your handler when the
 coroutine completes (example below). You can also pass any Asio completion token to
-`co_spawn(io, task, token)`, but the raw handler receives `std::exception_ptr`, so the pattern below keeps
-`error_info` at the boundary.
+`co_spawn(io, task, token)`, and the raw handler receives `std::exception_ptr` for unhandled exceptions; mailxx uses
+`result<T>`, so the pattern below keeps `error_info` at the boundary.
 
 #### Coroutines (C++20/23)
 

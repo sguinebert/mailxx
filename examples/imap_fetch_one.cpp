@@ -91,7 +91,12 @@ int main()
             {
                 message msg;
                 msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
-                msg.parse(fetch_resp.literals.front());
+                auto parse_res = msg.parse(fetch_resp.literals.front());
+                if (!parse_res)
+                {
+                    print_error(parse_res.error());
+                    co_return;
+                }
                 cout << "msg.subject()=" << msg.subject() << endl;
             }
 

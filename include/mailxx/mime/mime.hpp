@@ -23,18 +23,18 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <cstddef>
 #include <utility>
 #include <vector>
-#include <stdexcept>
 #include <map>
 #include <span>
 #include <optional>
 #include <fstream>
-#include <boost/regex.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/codec/base64_stream.hpp>
+#include <mailxx/detail/regex.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/detail/output_sink.hpp>
 #include <mailxx/mime/attachment_source.hpp>
-#include <mailxx/export.hpp>
+#include <mailxx/config.hpp>
 
 
 namespace mailxx
@@ -283,20 +283,18 @@ public:
 
     @param message_str String to store the message.
     @param dot_escape  Flag if the leading dot should be escaped.
-    @throw mime_error  Formatting failure, non multipart message with boundary.
-    @throw *           `format_header()`, `format_content(bool)`.
+    @return            Success or error.
     **/
-    void format(std::string& mime_str, bool dot_escape = true) const;
+    result_void format(std::string& mime_str, bool dot_escape = true) const;
 
     /**
     Formatting the mime part to a sink without buffering the whole body.
 
     @param sink       Output sink to write into.
     @param dot_escape Flag if the leading dot should be escaped.
-    @throw mime_error Formatting failure, non multipart message with boundary.
-    @throw *          `format_header()`, `format_content(bool)`.
+    @return           Success or error.
     **/
-    void format_to(detail::output_sink& sink, bool dot_escape = true) const;
+    result_void format_to(detail::output_sink& sink, bool dot_escape = true) const;
 
     /**
     Overload of `format(string&, bool)`.
@@ -304,7 +302,7 @@ public:
     Because of the way the u8string is comverted to string, it's more expensive when used with C++20.
     **/
 #if defined(__cpp_char8_t)
-    void format(std::u8string& mime_str, bool dot_escape = true) const;
+    result_void format(std::u8string& mime_str, bool dot_escape = true) const;
 #endif
 
     /**
@@ -316,10 +314,10 @@ public:
 
     @param mime_string String to parse.
     @param dot_escape  Flag if the leading dot should be escaped.
-    @throw *           `parse_by_line(const std::string&, bool)`.
+    @return            Result of parsing.
     @todo              `std::string_view` instead of `string::substr()`.
     **/
-    void parse(const std::string& mime_string, bool dot_escape = false);
+    result_void parse(const std::string& mime_string, bool dot_escape = false);
 
     /**
     Overload of `parse(const string&, bool)`.
@@ -327,7 +325,7 @@ public:
     Because of the way the u8string is comverted to string, it's more expensive when used with C++20.
     **/
 #if defined(__cpp_char8_t)
-    void parse(const std::u8string& mime_string, bool dot_escape = false);
+    result_void parse(const std::u8string& mime_string, bool dot_escape = false);
 #endif
 
     /**
@@ -343,19 +341,18 @@ public:
 
     @param line       String to be parsed. If it's CRLF, then message parsing ends; any further parsing is undefined.
     @param dot_escape Flag if the leading dot should be escaped.
-    @return           Mime itself.
-    @throw *          `parse_header()`, `parse_content`.
+    @return           Result of parsing.
     @todo             Determine a default charset.
     **/
-    mime& parse_by_line(const std::string& line, bool dot_escape = false);
+    result_void parse_by_line(const std::string& line, bool dot_escape = false);
 
     /**
     Setting the content type.
 
     @param cont_type  Content type to be set.
-    @throw mime_error Bad content type.
+    @return           Success or error.
     **/
-    void content_type(const content_type_t& cont_type);
+    result_void content_type(const content_type_t& cont_type);
 
     /**
     Setting the content type.
@@ -363,9 +360,9 @@ public:
     @param media_type    Media type to set.
     @param media_subtype Media subtype to set.
     @param charset       Charset to set.
-    @throw *             `content_type(const content_type_t&)`.
+    @return              Success or error.
     **/
-    void content_type(media_type_t media_type, const std::string& media_subtype, const std::string& charset = "");
+    result_void content_type(media_type_t media_type, const std::string& media_subtype, const std::string& charset = "");
 
     /**
     Setting the content type.
@@ -374,9 +371,9 @@ public:
     @param media_subtype Media subtype to set.
     @param charset       Charset to set.
     @param attributes    Content type attributes which are optional.
-    @throw *             `content_type(const content_type_t&)`.
+    @return              Success or error.
     **/
-    void content_type(media_type_t media_type, const std::string& media_subtype, const attributes_t& attributes,
+    result_void content_type(media_type_t media_type, const std::string& media_subtype, const attributes_t& attributes,
 		const std::string& charset = "");
 
     /**
@@ -390,9 +387,9 @@ public:
     Setting the content ID.
 
     @param id         The content ID in the format `string1@string2`.
-    @throw mime_error Invalid content ID.
+    @return           Success or error.
     **/
-    void content_id(std::string id);
+    result_void content_id(std::string id);
 
     /**
     Getting the content ID.
@@ -698,12 +695,12 @@ protected:
     /**
     Allowed characters for the header name. They consist of the printable ASCII characters without the colon.
     **/
-    static const boost::regex HEADER_NAME_REGEX;
+    static const detail::regex HEADER_NAME_REGEX;
 
     /**
     Allowed characters for the header value. They consist of the printable ASCII characters with the space.
     **/
-    static const boost::regex HEADER_VALUE_REGEX;
+    static const detail::regex HEADER_VALUE_REGEX;
 
     /**
     Content type attribute value allowed characters.
@@ -730,71 +727,69 @@ protected:
 
     @param ids         Vector of IDs.
     @param header_name Header name of IDs.
-    @return            String of IDs in the angle brackets.
+    @return            String of IDs in the angle brackets or error.
     **/
-    std::string format_many_ids(const std::vector<std::string>& ids, const std::string& header_name) const;
+    result<std::string> format_many_ids(const std::vector<std::string>& ids, const std::string& header_name) const;
 
     /**
     Formatting the ID.
 
     @param id          ID to format.
     @param header_name Header name of IDs.
-    @return            ID within the angle brackets.
+    @return            ID within the angle brackets or error.
     **/
-    std::string format_many_ids(const std::string& id, const std::string& header_name) const;
+    result<std::string> format_many_ids(const std::string& id, const std::string& header_name) const;
 
     /**
     Parsing a string of IDs into a vector.
 
     @param ids        String of IDs within the angle brackets.
-    @return           Vector of IDs.
-    @throw mime_error Parsing failure of the message ID.
+    @return           Vector of IDs or error.
     **/
-    std::vector<std::string> parse_many_ids(const std::string& ids) const;
+    result<std::vector<std::string>> parse_many_ids(const std::string& ids) const;
 
     /**
     Formatting header.
 
-    @return Mime header as string.
+    @return Mime header as string or error.
     **/
-    virtual std::string format_header() const;
+    virtual result<std::string> format_header() const;
 
     /**
     Formatting content by using the codec.
 
     @param dot_escape Flag if leading dots in lines should be escaped.
-    @return           Formatted content.
-    @throw *          `bit7::encode(const string&)`, `bit8::encode(const string&)`, `base64::encode(const string&)`, `quoted_printable::encode(const string&)`.
+    @return           Formatted content or error.
     **/
-    std::string format_content(bool dot_escape) const;
+    result<std::string> format_content(bool dot_escape) const;
 
     /**
     Formatting content type to a string.
 
-    @return Content type as string.
+    @return Content type as string or error.
     **/
-    std::string format_content_type() const;
+    result<std::string> format_content_type() const;
 
     /**
     Formatting transfer encoding to a string.
 
-    @return Transfer encoding as string.
+    @return Transfer encoding as string or error.
     **/
-    std::string format_transfer_encoding() const;
+    result<std::string> format_transfer_encoding() const;
 
     /**
     Formatting content disposition to a string.
 
-    @return Content disposition as string.
+    @return Content disposition as string or error.
     **/
-    std::string format_content_disposition() const;
+    result<std::string> format_content_disposition() const;
 
     /**
     Formating content ID.
 
-    @return Content ID header.
+    @return Content ID header or error.
     **/
-    std::string format_content_id() const;
+    result<std::string> format_content_id() const;
 
     /**
     Folding a multiline header.
@@ -807,27 +802,24 @@ protected:
     /**
     Parsing header by going through header lines and calling `parse_header_line()`.
 
-    @throw * `parse_header_line(const string&)`.
+    @return Result of parsing.
     **/
-    void parse_header();
+    result_void parse_header();
 
     /**
     Parsing the content by using the appropriate codec.
 
-    @throw * `bit7::decode(const string&)`, `bit8::decode(const string&)`, `base64::decode(const string&)`, `quoted_printable::decode(const string&)`.
+    @return Result of parsing.
     **/
-    void parse_content();
+    result_void parse_content();
 
     /**
     Parsing a header line for a specific header.
 
     @param header_line Header line to be parsed.
-    @throw *           `parse_header_name_value(const string&, string&, string&)`,
-                       `parse_content_type(const string&, media_type_t&, string&, map<string, string>&)`,
-                       `parse_content_transfer_encoding(const string&, content_transfer_encoding_t& encoding, map<string, string>&)`,
-                       `parse_content_disposition(const string&, content_disposition_t& disposition, map<string, string>&)`.
+    @return            Result of parsing.
     **/
-    virtual void parse_header_line(const std::string& header_line);
+    virtual result_void parse_header_line(const std::string& header_line);
 
     /**
     Parsing a header for the name and value.
@@ -835,11 +827,9 @@ protected:
     @param header_line  Header to parse.
     @param header_name  Header name parsed.
     @param header_value Header value parsed.
-    @throw mime_error   Parsing failure of header name.
-    @throw mime_error   Parsing failure of header line.
-    @throw mime_error   Parsing failure, header name or value empty.
+    @return             Result of parsing.
     **/
-    void parse_header_name_value(const std::string& header_line, std::string& header_name, std::string& header_value) const;
+    result_void parse_header_name_value(const std::string& header_line, std::string& header_name, std::string& header_value) const;
 
     /**
     Parsing the content type and its attributes.
@@ -848,10 +838,10 @@ protected:
     @param media_type       Media type parsed from the header.
     @param media_subtype    Media subtype parsed from the header.
     @param attributes       Attributes parsed from the header.
-    @throw mime_error       Parsing content type value failure.
-    @throw *                `parse_header_value_attributes(const string&, string&, map<string, string>&)`, `mime_type_as_enum(const string&)`.
+    @return                 Result of parsing.
     **/
-    void parse_content_type(const std::string& content_type_hdr, media_type_t& media_type, std::string& media_subtype, attributes_t& attributes) const;
+    result_void parse_content_type(const std::string& content_type_hdr, media_type_t& media_type, std::string& media_subtype,
+        attributes_t& attributes) const;
 
     /**
     Parsing the content transfer encoding value and attributes.
@@ -859,10 +849,10 @@ protected:
     @param transfer_encoding_hdr Content transfer encoding header without name
     @param encoding              Content transfer encoding value parsed.
     @param attributes            Content transfer encoding attributes parsed in the the key/value format.
-    @throw mime_error            Parsing content transfer encoding failure.
-    @throw *                     `parse_header_value_attributes(const string&, string&, map<string, string>&)`.
+    @return                      Result of parsing.
     **/
-    void parse_content_transfer_encoding(const std::string& transfer_encoding_hdr, content_transfer_encoding_t& encoding, attributes_t& attributes) const;
+    result_void parse_content_transfer_encoding(const std::string& transfer_encoding_hdr, content_transfer_encoding_t& encoding,
+        attributes_t& attributes) const;
 
     /**
     Parsing the content disposition value and attributes.
@@ -870,10 +860,10 @@ protected:
     @param content_disp_hdr Content disposition header without name.
     @param disposition      Content disposition value parsed.
     @param attributes       Content disposition attributes parsed in the the key/value format.
-    @throw mime_error       Parsing content disposition failure.
-    @throw *                `parse_header_value_attributes(const string&, string&, map<string, string>&)`.
+    @return                 Result of parsing.
     **/
-    void parse_content_disposition(const std::string& content_disp_hdr, content_disposition_t& disposition, attributes_t& attributes) const;
+    result_void parse_content_disposition(const std::string& content_disp_hdr, content_disposition_t& disposition,
+        attributes_t& attributes) const;
 
     /**
     Parsing value and attributes of the so called content headers.
@@ -881,43 +871,38 @@ protected:
     @param header     Header (without name) to be parsed.
     @param value      Header value parsed.
     @param attributes Header attributes parsed in the the key/value format.
-    @throw mime_error Parsing header value failure.
-    @throw mime_error Parsing attribute name failure.
-    @throw mime_error Parsing attribute value failure.
+    @return           Result of parsing.
     @todo             Allowed characters are more strict than required?
     **/
-    void parse_header_value_attributes(const std::string& header, std::string& value, attributes_t& attributes) const;
+    result_void parse_header_value_attributes(const std::string& header, std::string& value, attributes_t& attributes) const;
 
     /**
     Splitting an attribute into continued attribute parameters.
 
     @param attr_name  Attribute name to split.
     @param attr_value Attribute value to split.
-    @return           Header string with the continued attributes.
-    @throw *          `q_codec::encode(const string&, const string&, header_codec_t)`.
-    @throw *          `bit7::encode(const string&)`.
-    @todo             Percent encoding.
+    @return           Header string with the continued attributes or error.
     **/
-    std::string split_attributes(const std::string& attr_name, const string_t& attr_value) const;
+    result<std::string> split_attributes(const std::string& attr_name, const string_t& attr_value) const;
 
     /**
     Continued attribute parameters are merged into a single attribute parameter, the others remain as they are.
 
     @param attributes Attribute parameters where the merging is to be done.
-    @throw mime_error Parsing attribute failure.
+    @return           Result of parsing.
     @todo             There is no check for the second continuation indicator
     **/
-    void merge_attributes(attributes_t& attributes) const;
+    result_void merge_attributes(attributes_t& attributes) const;
 
     /**
     Decoding header value attribute.
 
     @param attr_value Attribute to decode.
     @return           Attribute decoded as string and its charset.
-    @throw mime_error Parsing attribute value failure, no language parameter.
+    @return           Result of decoding.
     @todo             URL decoding into a separate function.
     **/
-    string_t decode_value_attribute(const std::string& attr_value) const;
+    result<string_t> decode_value_attribute(const std::string& attr_value) const;
 
     /**
     Top level mime type represented as a string.
@@ -932,9 +917,9 @@ protected:
 
     @param media_type_val Mime type string to be converted.
     @return               Enum value of the mime type string.
-    @throw mime_error     Bad media type.
+    @return               Result of parsing.
     **/
-    media_type_t mime_type_as_enum(const std::string& media_type_val) const;
+    result<media_type_t> mime_type_as_enum(const std::string& media_type_val) const;
 
     /**
     Removing trailing empty lines from the body.
@@ -1036,52 +1021,6 @@ protected:
 };
 
 
-/**
-Exception reported by `mime` class.
-**/
-class mime_error : public std::runtime_error
-{
-public:
-
-    /**
-    Calling the parent constructor.
-
-    @param msg     Error message.
-    @param details Error message details.
-    **/
-    explicit mime_error(const std::string& msg, const std::string& details) : std::runtime_error(msg), details_(details)
-    {
-    }
-
-    /**
-
-    @param msg     Error message.
-    @param details Error message details.
-    **/
-    explicit mime_error(const char* msg, const std::string& details) : std::runtime_error(msg), details_(details)
-    {
-    }
-
-    /**
-    Gets the error message details.
-
-    @return Detailed error message.
-    **/
-    std::string details() const;
-
-protected:
-
-    /**
-    Error message details which could provide more insights into a problem.
-    **/
-    std::string details_;
-};
-
-inline std::string mime_error::details() const
-{
-    return details_;
-}
-
 // ------------------------------------------------------------
 // Header-only helpers for streaming output
 // ------------------------------------------------------------
@@ -1099,9 +1038,11 @@ inline const std::optional<mailxx::attachment_source>& mime::attachment_source()
     return attachment_source_;
 }
 
-inline void mime::format_to(detail::output_sink& sink, bool dot_escape) const
+inline result_void mime::format_to(detail::output_sink& sink, bool dot_escape) const
 {
-    sink.write(format_header());
+    std::string header;
+    MAILXX_TRY_ASSIGN(header, format_header());
+    sink.write(header);
 
     if (!parts_.empty())
     {
@@ -1113,24 +1054,24 @@ inline void mime::format_to(detail::output_sink& sink, bool dot_escape) const
             mime content_part;
             content_part.content(content_);
             content_type_t ct(content_type_.media_type(), content_type_.media_subtype(), content_type_.charset());
-            content_part.content_type(ct);
+            MAILXX_TRY(content_part.content_type(ct));
             content_part.content_transfer_encoding(encoding_);
             content_part.line_policy(line_policy_);
             content_part.strict_mode(strict_mode_);
             content_part.strict_codec_mode(strict_codec_mode_);
             sink.write(boundary_prefix);
-            content_part.format_to(sink, dot_escape);
+            MAILXX_TRY(content_part.format_to(sink, dot_escape));
             sink.write(codec::END_OF_LINE);
         }
 
         for (const auto& p : parts_)
         {
             sink.write(boundary_prefix);
-            p.format_to(sink, dot_escape);
+            MAILXX_TRY(p.format_to(sink, dot_escape));
             sink.write(codec::END_OF_LINE);
         }
         sink.write(BOUNDARY_DELIMITER + bound + BOUNDARY_DELIMITER + codec::END_OF_LINE);
-        return;
+        return ok();
     }
 
     if (attachment_source_)
@@ -1147,7 +1088,8 @@ inline void mime::format_to(detail::output_sink& sink, bool dot_escape) const
         {
             std::ifstream ifs(src.path, std::ios::binary);
             if (!ifs)
-                throw mime_error("mime format error", "Cannot open attachment file `" + src.path + "`.");
+                return fail_void(errc::mime_parse_error, "mime format error",
+                    "Cannot open attachment file `" + src.path + "`.");
 
             if (encoding_ == content_transfer_encoding_t::BASE_64)
             {
@@ -1174,7 +1116,7 @@ inline void mime::format_to(detail::output_sink& sink, bool dot_escape) const
                 }
                 sink.write(codec::END_OF_LINE);
             }
-            return;
+            return ok();
         }
 
         if (src.kind == source_kind::in_memory)
@@ -1191,13 +1133,15 @@ inline void mime::format_to(detail::output_sink& sink, bool dot_escape) const
                 sink.write(src.bytes);
                 sink.write(codec::END_OF_LINE);
             }
-            return;
+            return ok();
         }
     }
 
-    sink.write(format_content(dot_escape));
+    std::string content;
+    MAILXX_TRY_ASSIGN(content, format_content(dot_escape));
+    sink.write(content);
+    return ok();
 }
-
 
 } // namespace mailxx
 

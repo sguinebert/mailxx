@@ -98,7 +98,7 @@ BOOST_AUTO_TEST_CASE(append_streaming_literal_plus)
         server_thread.join();
 
     std::string expected;
-    BOOST_REQUIRE(msg.format_result(expected));
+    BOOST_REQUIRE(msg.format(expected));
     BOOST_CHECK_EQUAL(received, expected);
 }
 
@@ -153,6 +153,6 @@ BOOST_AUTO_TEST_CASE(append_streaming_wait_continuation)
         server_thread.join();
 
     std::string expected;
-    BOOST_REQUIRE(msg.format_result(expected));
+    BOOST_REQUIRE(msg.format(expected));
     BOOST_CHECK_EQUAL(received, expected);
 }

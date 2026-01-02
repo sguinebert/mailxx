@@ -18,46 +18,17 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <functional>
 #include <atomic>
 #include <mutex>
-#include <stdexcept>
+#include <optional>
 #include <variant>
 #include <mailxx/detail/asio_decl.hpp>
 #include <mailxx/detail/log.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/pool/pool_config.hpp>
 
 namespace mailxx::pool
 {
 
 using namespace mailxx::asio;
-
-/**
- * Exception thrown when pool operations fail.
- */
-class pool_error : public std::runtime_error
-{
-public:
-    explicit pool_error(const std::string& msg) : std::runtime_error(msg) {}
-    explicit pool_error(const char* msg) : std::runtime_error(msg) {}
-};
-
-
-/**
- * Exception thrown when acquire times out.
- */
-class pool_timeout_error : public pool_error
-{
-public:
-    pool_timeout_error() : pool_error("Connection pool acquire timeout") {}
-};
-
-
-/**
- * Exception thrown when pool is exhausted and cannot create more connections.
- */
-class pool_exhausted_error : public pool_error
-{
-public:
-    pool_exhausted_error() : pool_error("Connection pool exhausted") {}
-};
 
 
 // Forward declaration
@@ -174,8 +145,8 @@ class connection_pool : public std::enable_shared_from_this<connection_pool<Clie
 public:
     using client_type = Client;
     using pooled_type = pooled_connection<Client>;
-    using factory_type = std::function<awaitable<std::unique_ptr<Client>>()>;
-    using validator_type = std::function<awaitable<bool>(Client&)>;
+    using factory_type = std::function<awaitable<mailxx::result<std::unique_ptr<Client>>>()>;
+    using validator_type = std::function<awaitable<mailxx::result<bool>>(Client&)>;
     
     /**
      * Create a connection pool.
@@ -192,7 +163,10 @@ public:
         , shutdown_(false)
     {
         if (!factory_)
-            throw pool_error("Factory function is required");
+        {
+            init_error_ = make_error(errc::pool_config_error, "Pool factory function is required.");
+            shutdown_.store(true, std::memory_order_release);
+        }
     }
     
     ~connection_pool()
@@ -219,15 +193,20 @@ public:
     /**
      * Pre-create minimum connections (warmup the pool).
      */
-    awaitable<void> warmup()
+    awaitable<mailxx::result_void> warmup()
     {
         MAILXX_LOG_INFO("POOL", "Warming up pool with " << config_.min_connections << " connections");
-        
-        std::vector<awaitable<void>> tasks;
+
+        auto ready = ensure_ready();
+        if (!ready)
+            co_return ready;
+
+        std::vector<awaitable<mailxx::result_void>> tasks;
         for (std::size_t i = 0; i < config_.min_connections; ++i)
         {
-            co_await create_and_add_connection();
+            MAILXX_TRY_CO_AWAIT(create_and_add_connection());
         }
+        co_return mailxx::ok();
     }
     
     /**
@@ -235,14 +214,13 @@ public:
      * Creates a new connection if pool is empty and under max limit.
      * Waits if pool is at max capacity.
      * 
-     * @return A pooled connection that auto-returns on destruction
-     * @throws pool_timeout_error if acquire_timeout exceeded
-     * @throws pool_exhausted_error if pool is full and max_pending exceeded
+     * @return Result containing a pooled connection or an error
      */
-    awaitable<pooled_type> acquire()
+    awaitable<mailxx::result<pooled_type>> acquire()
     {
-        if (shutdown_.load(std::memory_order_acquire))
-            throw pool_error("Pool is shutting down");
+        auto ready = ensure_ready();
+        if (!ready)
+            co_return mailxx::fail<pooled_type>(std::move(ready).error());
         
         auto start_time = std::chrono::steady_clock::now();
         
@@ -260,19 +238,19 @@ public:
             if (stats_.pending_requests > config_.max_pending_requests)
             {
                 --stats_.pending_requests;
-                throw pool_exhausted_error();
+                co_return mailxx::fail<pooled_type>(errc::pool_exhausted, "Connection pool exhausted");
             }
         }
-        
-        try
+
+        auto result = co_await acquire_impl();
+
+        // Update stats
         {
-            pooled_type result = co_await acquire_impl();
-            
-            // Update stats
+            std::lock_guard lock(stats_mutex_);
+            --stats_.pending_requests;
+
+            if (result)
             {
-                std::lock_guard lock(stats_mutex_);
-                --stats_.pending_requests;
-                
                 auto wait_time = std::chrono::steady_clock::now() - start_time;
                 if (wait_time > std::chrono::milliseconds{1})
                 {
@@ -280,7 +258,7 @@ public:
                     // Update rolling average
                     auto wait_us = std::chrono::duration_cast<std::chrono::microseconds>(wait_time);
                     stats_.avg_wait_time = std::chrono::microseconds{
-                        (stats_.avg_wait_time.count() * (stats_.acquisitions_waited - 1) + wait_us.count()) 
+                        (stats_.avg_wait_time.count() * (stats_.acquisitions_waited - 1) + wait_us.count())
                         / stats_.acquisitions_waited
                     };
                 }
@@ -289,22 +267,18 @@ public:
                     ++stats_.acquisitions_immediate;
                 }
             }
-            
-            co_return result;
         }
-        catch (...)
-        {
-            std::lock_guard lock(stats_mutex_);
-            --stats_.pending_requests;
-            throw;
-        }
+
+        if (!result)
+            co_return mailxx::fail<pooled_type>(std::move(result).error());
+        co_return std::move(*result);
     }
     
     /**
      * Drain all connections and prevent new acquisitions.
      * Waits for all in-use connections to be returned.
      */
-    awaitable<void> drain()
+    awaitable<mailxx::result_void> drain()
     {
         MAILXX_LOG_INFO("POOL", "Draining pool...");
         shutdown_.store(true, std::memory_order_release);
@@ -324,7 +298,9 @@ public:
             // Yield and check again
             steady_timer timer(executor_);
             timer.expires_after(std::chrono::milliseconds{100});
-            co_await timer.async_wait(use_awaitable);
+            auto [ec] = co_await timer.async_wait(use_nothrow_awaitable);
+            if (ec)
+                co_return mailxx::fail_void(errc::net_io_failed, "Pool drain wait failed", ec.message(), ec);
         }
         
         // Clear idle connections
@@ -334,6 +310,7 @@ public:
         }
         
         MAILXX_LOG_INFO("POOL", "Pool drained");
+        co_return mailxx::ok();
     }
     
     /**
@@ -395,7 +372,16 @@ private:
         connection_metadata metadata;
     };
     
-    awaitable<pooled_type> acquire_impl()
+    mailxx::result_void ensure_ready() const
+    {
+        if (init_error_)
+            return mailxx::fail_void(*init_error_);
+        if (shutdown_.load(std::memory_order_acquire))
+            return mailxx::fail_void(errc::pool_invalid_state, "Pool is shutting down");
+        return mailxx::ok();
+    }
+
+    awaitable<mailxx::result<pooled_type>> acquire_impl()
     {
         auto self = this->shared_from_this();
         // Try to get an existing connection
@@ -435,19 +421,11 @@ private:
                 // Validate if configured
                 if (!should_recycle && config_.validate_on_acquire && validator_)
                 {
-                    try
-                    {
-                        bool valid = co_await validator_(*client);
-                        if (!valid)
-                        {
-                            should_recycle = true;
-                            MAILXX_LOG_DEBUG("POOL", "Connection validation failed, recycling");
-                        }
-                    }
-                    catch (...)
+                    auto valid_res = co_await validator_(*client);
+                    if (!valid_res || !*valid_res)
                     {
                         should_recycle = true;
-                        MAILXX_LOG_DEBUG("POOL", "Connection validation threw exception, recycling");
+                        MAILXX_LOG_DEBUG("POOL", "Connection validation failed, recycling");
                     }
                 }
                 
@@ -469,7 +447,7 @@ private:
                     ++stats_.in_use_connections;
                 }
                 
-                co_return pooled_type(std::move(client), std::move(metadata), self);
+                co_return mailxx::ok(pooled_type(std::move(client), std::move(metadata), self));
             }
             
             // No idle connection available, try to create new one
@@ -481,28 +459,26 @@ private:
             
             if (can_create)
             {
-                try
+                auto create_res = co_await create_connection();
+                if (create_res)
                 {
-                    client = co_await create_connection();
-                    
+                    client = std::move(*create_res);
                     {
                         std::lock_guard lock(stats_mutex_);
                         ++stats_.total_connections;
                         ++stats_.connections_created;
                         ++stats_.in_use_connections;
                     }
-                    
-                    co_return pooled_type(std::move(client), connection_metadata{}, self);
+
+                    co_return mailxx::ok(pooled_type(std::move(client), connection_metadata{}, self));
                 }
-                catch (const std::exception& e)
+
+                MAILXX_LOG_WARN("POOL", "Failed to create connection: " << create_res.error().message);
                 {
-                    MAILXX_LOG_WARN("POOL", "Failed to create connection: " << e.what());
-                    {
-                        std::lock_guard lock(stats_mutex_);
-                        ++stats_.connections_failed;
-                    }
-                    // Fall through to wait
+                    std::lock_guard lock(stats_mutex_);
+                    ++stats_.connections_failed;
                 }
+                // Fall through to wait
             }
             
             // Pool is at capacity, wait for a connection to be returned via channel
@@ -522,7 +498,7 @@ private:
                 // Timer finished first
                 std::lock_guard lock(stats_mutex_);
                 ++stats_.acquisitions_timeout;
-                throw pool_timeout_error();
+                co_return mailxx::fail<pooled_type>(errc::pool_timeout, "Connection pool acquire timeout");
             }
             else
             {
@@ -532,7 +508,7 @@ private:
                     if (ec == mailxx::asio::error::make_error_code(mailxx::asio::error::operation_aborted))
                         continue;
                     if (shutdown_.load(std::memory_order_acquire))
-                        throw pool_error("Pool is shutting down");
+                        co_return mailxx::fail<pooled_type>(errc::pool_invalid_state, "Pool is shutting down");
                     continue;
                 }
             }
@@ -540,65 +516,67 @@ private:
         }
     }
     
-    awaitable<std::unique_ptr<Client>> create_connection()
+    awaitable<mailxx::result<std::unique_ptr<Client>>> create_connection()
     {
         unsigned int attempts = 0;
-        std::exception_ptr last_error;
+        std::optional<error_info> last_error;
+        const unsigned int max_attempts = config_.creation_retry_count == 0 ? 1 : config_.creation_retry_count;
         
-        while (attempts < config_.creation_retry_count)
+        while (attempts < max_attempts)
         {
-            try
-            {
-                co_return co_await factory_();
-            }
-            catch (...)
-            {
-                last_error = std::current_exception();
-            }
+            auto res = co_await factory_();
+            if (res)
+                co_return res;
+            last_error = res.error();
 
             ++attempts;
-            if (attempts < config_.creation_retry_count)
+            if (attempts < max_attempts)
             {
                 MAILXX_LOG_DEBUG("POOL", "Connection creation failed, retry "
-                    << attempts << "/" << config_.creation_retry_count);
+                    << attempts << "/" << max_attempts);
 
                 steady_timer timer(executor_);
                 timer.expires_after(config_.creation_retry_delay);
-                co_await timer.async_wait(use_awaitable);
+                auto [ec] = co_await timer.async_wait(use_nothrow_awaitable);
+                if (ec)
+                    co_return mailxx::fail<std::unique_ptr<Client>>(errc::net_io_failed,
+                        "Pool connection retry wait failed", ec.message(), ec);
             }
         }
-        
-        std::rethrow_exception(last_error);
+
+        if (last_error)
+            co_return mailxx::fail<std::unique_ptr<Client>>(std::move(*last_error));
+        co_return mailxx::fail<std::unique_ptr<Client>>(errc::pool_config_error, "Connection creation failed");
     }
     
-    awaitable<void> create_and_add_connection()
+    awaitable<mailxx::result_void> create_and_add_connection()
     {
-        try
+        auto client_res = co_await create_connection();
+        if (!client_res)
         {
-            auto client = co_await create_connection();
-            
-            {
-                std::lock_guard lock(pool_mutex_);
-                idle_connections_.push_back({std::move(client), connection_metadata{}});
-            }
-            
-            {
-                std::lock_guard lock(stats_mutex_);
-                ++stats_.total_connections;
-                ++stats_.idle_connections;
-                ++stats_.connections_created;
-            }
-
-            (void)channel_.try_send(mailxx::asio::error_code{});
-        }
-        catch (const std::exception& e)
-        {
-            MAILXX_LOG_WARN("POOL", "Failed to create warmup connection: " << e.what());
+            MAILXX_LOG_WARN("POOL", "Failed to create warmup connection: " << client_res.error().message);
             {
                 std::lock_guard lock(stats_mutex_);
                 ++stats_.connections_failed;
             }
+            co_return mailxx::fail_void(std::move(client_res).error());
         }
+
+        auto client = std::move(*client_res);
+        {
+            std::lock_guard lock(pool_mutex_);
+            idle_connections_.push_back({std::move(client), connection_metadata{}});
+        }
+
+        {
+            std::lock_guard lock(stats_mutex_);
+            ++stats_.total_connections;
+            ++stats_.idle_connections;
+            ++stats_.connections_created;
+        }
+
+        (void)channel_.try_send(mailxx::asio::error_code{});
+        co_return mailxx::ok();
     }
     
     void return_connection(std::unique_ptr<Client> client, connection_metadata metadata, bool valid)
@@ -688,6 +666,7 @@ private:
     
     // Shutdown flag
     std::atomic<bool> shutdown_;
+    std::optional<error_info> init_error_;
 };
 
 

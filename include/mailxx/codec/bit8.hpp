@@ -19,7 +19,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <boost/algorithm/string/trim.hpp>
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/detail/result.hpp>
-#include <mailxx/export.hpp>
+#include <mailxx/config.hpp>
 
 
 namespace mailxx
@@ -62,7 +62,6 @@ public:
 
     @param text        String to encode.
     @return            Vector of eight bit encoded strings.
-    @throw codec_error Bad character.
     **/
     result<std::vector<std::string>> encode(const std::string& text) const
     {
@@ -125,8 +124,6 @@ public:
 
     @param text        Vector of eight bit encoded strings.
     @return            Decoded string.
-    @throw codec_error Line policy overflow.
-    @throw codec_error Bad character.
     **/
     result<std::string> decode(const std::vector<std::string>& text) const
     {

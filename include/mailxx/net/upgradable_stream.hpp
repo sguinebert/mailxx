@@ -30,7 +30,6 @@
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 #include <mailxx/detail/result.hpp>
-#include <mailxx/net/tls_error.hpp>
 #include <mailxx/net/tls_options.hpp>
 #include <mailxx/net/tls_trust_store.hpp>
 

@@ -19,6 +19,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/pool/connection_pool.hpp>
 #include <mailxx/pool/pool_config.hpp>
 #include <mailxx/pool/rate_limiter.hpp>
+#include <mailxx/detail/result.hpp>
 #include <mailxx/smtp/client.hpp>
 #include <mailxx/smtp/types.hpp>
 
@@ -102,7 +103,7 @@ public:
      * @param credentials Optional authentication credentials
      * @param auth_method Authentication method (default: auto_detect)
      */
-    void configure(
+    mailxx::result_void configure(
         pool_endpoint endpoint,
         ssl::context& tls_ctx,
         std::optional<pool_credentials> credentials = std::nullopt,
@@ -117,45 +118,45 @@ public:
         pool_ = std::make_shared<pool_type>(
             executor_,
             config_,
-            [this]() -> awaitable<std::unique_ptr<client_type>> {
+            [this]() -> awaitable<mailxx::result<std::unique_ptr<client_type>>> {
                 co_return co_await create_client();
             }
         );
         
         // Set validator (NOOP to check connection is alive)
-        pool_->set_validator([](client_type& client) -> awaitable<bool> {
-            try
-            {
-                auto reply = co_await client.noop();
-                co_return reply.is_positive_completion();
-            }
-            catch (...)
-            {
-                co_return false;
-            }
+        pool_->set_validator([](client_type& client) -> awaitable<mailxx::result<bool>> {
+            auto reply = co_await client.noop();
+            if (!reply)
+                co_return mailxx::fail<bool>(std::move(reply).error());
+            co_return mailxx::ok(reply->is_positive_completion());
         });
+
+        return mailxx::ok();
     }
     
     /**
      * Convenience configure method with separate parameters.
      */
-    void configure(
+    mailxx::result_void configure(
         const std::string& host,
         const std::string& service,
         ssl::context& tls_ctx,
         std::optional<pool_credentials> credentials = std::nullopt,
         smtp::auth_method auth_method = smtp::auth_method::auto_detect)
     {
-        configure(pool_endpoint{host, service, true}, tls_ctx, std::move(credentials), auth_method);
+        return configure(pool_endpoint{host, service, true}, tls_ctx, std::move(credentials), auth_method);
     }
     
     /**
      * Pre-create connections (warmup).
      */
-    awaitable<void> warmup()
+    awaitable<mailxx::result_void> warmup()
     {
-        ensure_configured();
-        co_await pool_->warmup();
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return ready;
+        MAILXX_TRY_CO_AWAIT(pool_->warmup());
+        co_return mailxx::ok();
     }
     
     /**
@@ -166,28 +167,27 @@ public:
      * @param env Optional envelope (sender/recipients override)
      * @return Server reply
      */
-    awaitable<smtp::reply> send(
+    awaitable<mailxx::result<smtp::reply>> send(
         const mailxx::message& msg,
         const smtp::envelope& env = smtp::envelope{})
     {
-        ensure_configured();
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return mailxx::fail<smtp::reply>(std::move(ready).error());
         
         // Apply rate limiting before acquiring connection
         co_await apply_rate_limit();
         
-        auto conn = co_await pool_->acquire();
-        
-        try
+        pooled_type conn;
+        MAILXX_CO_TRY_ASSIGN(conn, co_await pool_->acquire());
+
+        auto reply = co_await conn->send(msg, env);
+        if (!reply)
         {
-            auto reply = co_await conn->send(msg, env);
-            co_return reply;
-        }
-        catch (...)
-        {
-            // Connection might be broken, invalidate it
             conn.invalidate();
-            throw;
+            co_return mailxx::fail<smtp::reply>(std::move(reply).error());
         }
+        co_return std::move(*reply);
     }
     
     /**
@@ -199,14 +199,16 @@ public:
      * @param envs Optional envelopes (must be same size as messages or empty)
      * @return Batch results with success/failure for each message
      */
-    awaitable<batch_result> send_batch(
+    awaitable<mailxx::result<batch_result>> send_batch(
         std::span<const mailxx::message> messages,
         std::span<const smtp::envelope> envs = {})
     {
-        ensure_configured();
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return mailxx::fail<batch_result>(std::move(ready).error());
         
         if (!envs.empty() && envs.size() != messages.size())
-            throw pool_error("Envelope count must match message count");
+            co_return mailxx::fail<batch_result>(errc::pool_config_error, "Envelope count must match message count");
         
         batch_result results;
         results.results.reserve(messages.size());
@@ -225,30 +227,34 @@ public:
             batch_result::entry entry;
             entry.index = i;
             
-            try
+            // Get connection if we don't have one
+            if (!conn)
             {
-                // Get connection if we don't have one
-                if (!conn)
-                {
-                    conn = co_await pool_->acquire();
-                }
-                
-                const smtp::envelope& env = envs.empty() ? smtp::envelope{} : envs[i];
-                
-                entry.reply = co_await conn->send(messages[i], env);
+                MAILXX_CO_TRY_ASSIGN(conn, co_await pool_->acquire());
+            }
+
+            const smtp::envelope& env = envs.empty() ? smtp::envelope{} : envs[i];
+
+            auto send_res = co_await conn->send(messages[i], env);
+            if (send_res)
+            {
+                entry.reply = std::move(*send_res);
                 entry.success = true;
                 ++results.successful;
-                
-                // RSET after each message to prepare for next
-                co_await conn->rset();
+
+                auto rset_res = co_await conn->rset();
+                if (!rset_res && conn)
+                {
+                    conn.invalidate();
+                    conn.release();
+                }
             }
-            catch (const std::exception& e)
+            else
             {
                 entry.success = false;
-                entry.error = e.what();
+                entry.error = format_error(send_res.error());
                 ++results.failed;
-                
-                // Invalidate connection on error
+
                 if (conn)
                 {
                     conn.invalidate();
@@ -259,7 +265,7 @@ public:
             results.results.push_back(std::move(entry));
         }
         
-        co_return results;
+        co_return mailxx::ok(std::move(results));
     }
     
     /**
@@ -269,15 +275,21 @@ public:
      * @param messages Messages to send
      * @return Batch results
      */
-    awaitable<batch_result> send_batch_single_connection(
+    awaitable<mailxx::result<batch_result>> send_batch_single_connection(
         std::span<const mailxx::message> messages)
     {
-        ensure_configured();
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return mailxx::fail<batch_result>(std::move(ready).error());
         
         batch_result results;
         results.results.reserve(messages.size());
-        
-        auto conn = co_await pool_->acquire();
+
+        pooled_type conn;
+        auto conn_res = co_await pool_->acquire();
+        if (!conn_res)
+            co_return mailxx::fail<batch_result>(std::move(conn_res).error());
+        conn = std::move(*conn_res);
         
         for (std::size_t i = 0; i < messages.size(); ++i)
         {
@@ -286,80 +298,79 @@ public:
             
             batch_result::entry entry;
             entry.index = i;
-            
-            try
+
+            if (!conn)
             {
-                entry.reply = co_await conn->send(messages[i]);
+                auto reacquire = co_await pool_->acquire();
+                if (!reacquire)
+                {
+                    for (std::size_t j = i; j < messages.size(); ++j)
+                    {
+                        results.results.push_back({j, false, {}, format_error(reacquire.error())});
+                        ++results.failed;
+                    }
+                    break;
+                }
+                conn = std::move(*reacquire);
+            }
+
+            auto send_res = co_await conn->send(messages[i]);
+            if (send_res)
+            {
+                entry.reply = std::move(*send_res);
                 entry.success = true;
                 ++results.successful;
-                
-                // RSET for next message
+
                 if (i + 1 < messages.size())
                 {
-                    co_await conn->rset();
+                    auto rset_res = co_await conn->rset();
+                    if (!rset_res && conn)
+                    {
+                        conn.invalidate();
+                        conn.release();
+                    }
                 }
             }
-            catch (const std::exception& e)
+            else
             {
                 entry.success = false;
-                entry.error = e.what();
+                entry.error = format_error(send_res.error());
                 ++results.failed;
-                
-                // Try RSET to recover, or get new connection
-                try
-                {
-                    co_await conn->rset();
-                }
-                catch (...)
+
+                if (conn)
                 {
                     conn.invalidate();
                     conn.release();
-                    
-                    // Get new connection for remaining messages
-                    if (i + 1 < messages.size())
-                    {
-                        try
-                        {
-                            conn = co_await pool_->acquire();
-                        }
-                        catch (...)
-                        {
-                            // Can't continue, mark rest as failed
-                            for (std::size_t j = i + 1; j < messages.size(); ++j)
-                            {
-                                results.results.push_back({j, false, {}, "Connection lost"});
-                                ++results.failed;
-                            }
-                            break;
-                        }
-                    }
                 }
             }
             
             results.results.push_back(std::move(entry));
         }
         
-        co_return results;
+        co_return mailxx::ok(std::move(results));
     }
     
     /**
      * Acquire a raw connection for custom operations.
      */
-    awaitable<pooled_type> acquire()
+    awaitable<mailxx::result<pooled_type>> acquire()
     {
-        ensure_configured();
+        auto ready = ensure_configured();
+        if (!ready)
+            co_return mailxx::fail<pooled_type>(std::move(ready).error());
         co_return co_await pool_->acquire();
     }
     
     /**
      * Drain all connections and shut down the pool.
      */
-    awaitable<void> drain()
+    awaitable<mailxx::result_void> drain()
     {
         if (pool_)
         {
-            co_await pool_->drain();
+            MAILXX_TRY_CO_AWAIT(pool_->drain());
         }
+        co_return mailxx::ok();
     }
     
     /**
@@ -445,10 +456,23 @@ public:
     }
 
 private:
-    void ensure_configured() const
+    static std::string format_error(const error_info& err)
+    {
+        std::string msg = err.message.empty() ? std::string(to_string(err.code)) : err.message;
+        if (!err.detail.empty())
+        {
+            if (!msg.empty())
+                msg += ": ";
+            msg += err.detail;
+        }
+        return msg;
+    }
+
+    mailxx::result_void ensure_configured() const
     {
         if (!pool_)
-            throw pool_error("SMTP pool not configured. Call configure() first.");
+            return mailxx::fail_void(errc::pool_invalid_state, "SMTP pool not configured. Call configure() first.");
+        return mailxx::ok();
     }
 
     /**
@@ -462,34 +486,34 @@ private:
         }
     }
     
-    awaitable<std::unique_ptr<client_type>> create_client()
+    awaitable<mailxx::result<std::unique_ptr<client_type>>> create_client()
     {
         auto client = std::make_unique<client_type>(executor_);
         
         // Connect
-        co_await client->connect(endpoint_.host, endpoint_.service);
-        co_await client->read_greeting();
-        co_await client->ehlo();
+        MAILXX_TRY_CO_AWAIT(client->connect(endpoint_.host, endpoint_.service));
+        MAILXX_TRY_CO_AWAIT(client->read_greeting());
+        MAILXX_TRY_CO_AWAIT(client->ehlo());
         
         // TLS if needed
         if (endpoint_.use_tls && tls_ctx_)
         {
             const std::string sni = endpoint_.tls_sni.empty() ? endpoint_.host : endpoint_.tls_sni;
-            co_await client->start_tls(*tls_ctx_, sni);
-            co_await client->ehlo();  // Re-EHLO after STARTTLS
+            MAILXX_TRY_CO_AWAIT(client->start_tls(*tls_ctx_, sni));
+            MAILXX_TRY_CO_AWAIT(client->ehlo());  // Re-EHLO after STARTTLS
         }
         
         // Authenticate if credentials provided
         if (credentials_.has_value() && !credentials_->empty())
         {
-            co_await client->authenticate(
+            MAILXX_TRY_CO_AWAIT(client->authenticate(
                 credentials_->username, 
                 credentials_->password, 
                 auth_method_
-            );
+            ));
         }
         
-        co_return client;
+        co_return mailxx::ok(std::move(client));
     }
     
     any_io_executor executor_;

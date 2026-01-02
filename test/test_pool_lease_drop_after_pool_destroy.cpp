@@ -38,9 +38,9 @@ BOOST_AUTO_TEST_CASE(lease_destruction_after_pool_reset)
     cfg.min_connections = 0;
     cfg.acquire_timeout = std::chrono::seconds{1};
 
-    auto factory = [&]() -> asio::awaitable<std::unique_ptr<dummy_client>>
+    auto factory = [&]() -> asio::awaitable<result<std::unique_ptr<dummy_client>>>
     {
-        co_return std::make_unique<dummy_client>(destroyed);
+        co_return ok(std::make_unique<dummy_client>(destroyed));
     };
 
     auto pool = pool::make_pool<dummy_client>(ctx.get_executor(), cfg, factory);
@@ -48,7 +48,10 @@ BOOST_AUTO_TEST_CASE(lease_destruction_after_pool_reset)
     asio::co_spawn(ctx,
         [pool = std::move(pool)]() mutable -> asio::awaitable<void>
         {
-            auto lease = co_await pool->acquire();
+            auto lease_res = co_await pool->acquire();
+            if (!lease_res)
+                co_return;
+            auto lease = std::move(*lease_res);
             // Drop the pool while lease is still alive
             pool.reset();
             // lease destructs at scope end

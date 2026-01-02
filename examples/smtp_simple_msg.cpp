@@ -20,6 +20,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <boost/asio/detached.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include "example_util.hpp"
 #include <mailxx/mime/message.hpp>
 #include <mailxx/net/tls_mode.hpp>
 #include <mailxx/smtp/client.hpp>
@@ -29,12 +30,6 @@ using mailxx::message;
 using mailxx::mail_address;
 using mailxx::smtp::auth_method;
 using mailxx::smtp::client;
-using mailxx::smtp::error;
-using mailxx::net::dialog_error;
-using std::cout;
-using std::endl;
-
-
 int main()
 {
     boost::asio::io_context io_ctx;
@@ -43,38 +38,43 @@ int main()
     boost::asio::co_spawn(io_ctx,
         [&]() -> boost::asio::awaitable<void>
         {
-            try
+            // create mail message
+            message msg;
+            msg.from(mail_address("mailxx library", "mailxx@gmail.com"));// set the correct sender name and address
+            msg.add_recipient(mail_address("mailxx library", "mailxx@gmail.com"));// set the correct recipent name and address
+            msg.subject("smtps simple message");
+            msg.content("Hello, World!");
+
+            // connect to server
+            mailxx::smtp::options options;
+            options.tls.use_default_verify_paths = true;
+            options.tls.verify = mailxx::net::verify_mode::peer;
+            options.tls.verify_host = true;
+            options.auto_starttls = true;
+
+            client conn(io_ctx.get_executor(), options);
+            if (auto connect_res = co_await conn.connect("smtp.gmail.com", "587",
+                mailxx::net::tls_mode::starttls, &ssl_ctx, "smtp.gmail.com"); !connect_res)
             {
-                // create mail message
-                message msg;
-                msg.from(mail_address("mailxx library", "mailxx@gmail.com"));// set the correct sender name and address
-                msg.add_recipient(mail_address("mailxx library", "mailxx@gmail.com"));// set the correct recipent name and address
-                msg.subject("smtps simple message");
-                msg.content("Hello, World!");
-
-                // connect to server
-                mailxx::smtp::options options;
-                options.tls.use_default_verify_paths = true;
-                options.tls.verify = mailxx::net::verify_mode::peer;
-                options.tls.verify_host = true;
-                options.auto_starttls = true;
-
-                client conn(io_ctx.get_executor(), options);
-                co_await conn.connect("smtp.gmail.com", "587",
-                    mailxx::net::tls_mode::starttls, &ssl_ctx, "smtp.gmail.com");
-
-                // modify username/password to use real credentials
-                co_await conn.authenticate("mailxx@gmail.com", "mailxxpass", auth_method::login);
-                co_await conn.send(msg);
-                co_await conn.quit();
+                print_error(connect_res.error());
+                co_return;
             }
-            catch (error& exc)
+
+            // modify username/password to use real credentials
+            if (auto auth_res = co_await conn.authenticate("mailxx@gmail.com", "mailxxpass", auth_method::login); !auth_res)
             {
-                cout << exc.what() << endl;
+                print_error(auth_res.error());
+                co_return;
             }
-            catch (dialog_error& exc)
+            if (auto send_res = co_await conn.send(msg); !send_res)
             {
-                cout << exc.what() << endl;
+                print_error(send_res.error());
+                co_return;
+            }
+            if (auto quit_res = co_await conn.quit(); !quit_res)
+            {
+                print_error(quit_res.error());
+                co_return;
             }
             co_return;
         },

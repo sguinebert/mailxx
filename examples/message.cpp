@@ -15,6 +15,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 */
 
 
+#include <cstdlib>
 #include <iostream>
 #include <mailxx/mime/mailboxes.hpp>
 #include <mailxx/mime/message.hpp>
@@ -31,115 +32,134 @@ using mailxx::message;
 
 int main()
 {
-    // Set the file encoding to UTF-8 to properly see the letters in this snippet.
+    auto require_ok = [](auto&& res, const char* action) {
+        if (!res)
+        {
+            std::cerr << action << " error: " << res.error().message;
+            if (!res.error().detail.empty())
+                std::cerr << ": " << res.error().detail;
+            std::cerr << '\n';
+            return false;
+        }
+        return true;
+    };
+
+    // Set the file encoding to UTF-8 to match this snippet.
     {
         message msg;
         msg.from(mail_address("mail io", "contact@mailxx.dev"));
         msg.add_recipient(mail_address("mail io", "contact@mailxx.dev"));
-        // The subject is automatically determined as UTF-8 since it contains 8bit characters. It is encoded as Quoted Printable,
-        msg.subject("Здраво, Свете!", mailxx::codec::codec_t::QUOTED_PRINTABLE);
+        // The subject is encoded as Quoted Printable because it is explicitly set.
+        msg.subject("Hello, World!", mailxx::codec::codec_t::QUOTED_PRINTABLE);
         msg.content("Hello, World!");
         string msg_str;
-        msg.format(msg_str);
+        if (!require_ok(msg.format(msg_str), "format"))
+            return EXIT_FAILURE;
         cout << msg_str << endl;
-        // The subject is printed as `=?UTF-8?Q?=D0=97=D0=B4=D1=80=D0=B0=D0=B2=D0=BE,_=D0=A1=D0=B2=D0=B5=D1=82=D0?=\r\n =?UTF-8?Q?=B5!?=`
+        // The subject is printed as `=?ASCII?Q?Hello,_World!?=`
     }
 
-    // Set the file encoding to UTF-8 to properly see the letters in this snippet.
+    // Set the file encoding to UTF-8 to match this snippet.
     {
         message msg;
         msg.from(mail_address("mail io", "contact@mailxx.dev"));
         msg.add_recipient(mail_address("mail io", "contact@mailxx.dev"));
         // The subject remains in 8bit because such header is set.
-        msg.subject("Здраво, Свете!", mailxx::codec::codec_t::UTF8);
+        msg.subject("Hello, World!", mailxx::codec::codec_t::UTF8);
         msg.content("Hello, World!");
         string msg_str;
-        msg.format(msg_str);
+        if (!require_ok(msg.format(msg_str), "format"))
+            return EXIT_FAILURE;
         cout << msg_str << endl;
     }
 
-    // Set the file encoding to ISO-8859-2 to properly see the letters in this snippet.
+    // Set the file encoding to ISO-8859-2 to match this snippet.
     {
         message msg;
         msg.from(mail_address("mail io", "contact@mailxx.dev"));
         msg.add_recipient(mail_address("mail io", "contact@mailxx.dev"));
         msg.content_transfer_encoding(mime::content_transfer_encoding_t::QUOTED_PRINTABLE);
-        msg.subject_raw(string_t("Zdravo, Sveti�u!", "iso-8859-2"));
+        msg.subject_raw(string_t("Hello, World!", "iso-8859-2"));
         msg.content("Hello, World!");
         string msg_str;
-        msg.format(msg_str);
+        if (!require_ok(msg.format(msg_str), "format"))
+            return EXIT_FAILURE;
         cout << msg_str << endl;
-        // The subject is printed as `Zdravo, Svetiću!` in the ISO-8859-2 encoding.
+        // The subject is printed as `Hello, World!` in the ISO-8859-2 encoding.
     }
 
-    // Set the file encoding to ISO-8859-5 to properly see the letters in this snippet.
+    // Set the file encoding to ISO-8859-5 to match this snippet.
     {
         message msg;
         msg.from(mail_address("mail io", "contact@mailxx.dev"));
         msg.add_recipient(mail_address("mail io", "contact@mailxx.dev"));
         msg.content_transfer_encoding(mime::content_transfer_encoding_t::BASE_64);
-        msg.subject_raw(string_t("������, �����", "iso-8859-5"));
+        msg.subject_raw(string_t("Hello, World!", "iso-8859-5"));
         msg.content("Hello, World!");
         string msg_str;
-        msg.format(msg_str);
+        if (!require_ok(msg.format(msg_str), "format"))
+            return EXIT_FAILURE;
         cout << msg_str << endl;
     }
 
-    // Set the file encoding to UTF-8 to properly see the letters in this snippet.
+    // Set the file encoding to UTF-8 to match this snippet.
     {
         message msg;
         msg.from(mail_address("mail io", "contact@mailxx.dev"));
         msg.add_recipient(mail_address("mail io", "contact@mailxx.dev"));
         msg.content_transfer_encoding(mime::content_transfer_encoding_t::BASE_64);
-        msg.subject_raw(string_t("Здраво, Свете!", "utf-8",
+        msg.subject_raw(string_t("Hello, World!", "utf-8",
             mailxx::codec::codec_t::QUOTED_PRINTABLE));
         msg.content("Hello, World!");
         string msg_str;
-        msg.format(msg_str);
+        if (!require_ok(msg.format(msg_str), "format"))
+            return EXIT_FAILURE;
         cout << msg_str << endl;
-        // The subject is printed as `=?UTF-8?Q?=D0=97=D0=B4=D1=80=D0=B0=D0=B2=D0=BE,_=D0=A1=D0=B2=D0=B5=D1=82=D0=B5!?=`.
+        // The subject is printed as `=?UTF-8?Q?Hello,_World!?=`.
     }
 
     {
         string msg_str = "From: mail io <contact@mailxx.dev>\r\n"
             "To: mail io <contact@mailxx.dev>\r\n"
             "Date: Sat, 18 Jun 2022 05:56:34 +0000\r\n"
-            "Subject: =?ISO-8859-2?Q?Zdravo,_Sveti=E6u!?=\r\n"
-            "\r\n"
-            "Zdravo, Svete!\r\n";
-        message msg;
-        msg.parse(msg_str);
-        cout << msg.subject() << endl;
-        // The subject is printed as `Zdravo, Svetiću!` in the ISO-8859-2 encoding.
-    }
-
-    {
-        string msg_str = "From: mail io <contact@mailxx.dev>\r\n"
-            "To: mail io <contact@mailxx.dev>\r\n"
-            "Date: Sat, 18 Jun 2022 05:56:34 +0000\r\n"
-            "Subject: =?ISO-8859-5?Q?=B7=D4=E0=D0=D2=DE,_=C1=D2=D5=E2=D5!?=\r\n"
+            "Subject: =?ISO-8859-2?Q?Hello,_World!?=\r\n"
             "\r\n"
             "Hello, World!\r\n";
         message msg;
-        msg.parse(msg_str);
+        if (!require_ok(msg.parse(msg_str), "parse"))
+            return EXIT_FAILURE;
         cout << msg.subject() << endl;
-        // The subject is printed as `Здраво, Свете!` in the ISO-8859-5 encoding.
+        // The subject is printed as `Hello, World!` in the ISO-8859-2 encoding.
     }
 
     {
         string msg_str = "From: mail io <contact@mailxx.dev>\r\n"
             "To: mail io <contact@mailxx.dev>\r\n"
             "Date: Sat, 18 Jun 2022 05:56:34 +0000\r\n"
-            "Subject: =?UTF-8?Q?=D0=97=D0=B4=D1=80=D0=B0=D0=B2=D0=BE,_=D0=A1=D0=B2=D0=B5=D1=82=D0=B5!?=\r\n"
+            "Subject: =?ISO-8859-5?Q?Hello,_World!?=\r\n"
+            "\r\n"
+            "Hello, World!\r\n";
+        message msg;
+        if (!require_ok(msg.parse(msg_str), "parse"))
+            return EXIT_FAILURE;
+        cout << msg.subject() << endl;
+        // The subject is printed as `Hello, World!` in the ISO-8859-5 encoding.
+    }
+
+    {
+        string msg_str = "From: mail io <contact@mailxx.dev>\r\n"
+            "To: mail io <contact@mailxx.dev>\r\n"
+            "Date: Sat, 18 Jun 2022 05:56:34 +0000\r\n"
+            "Subject: =?UTF-8?Q?Hello,_World!?=\r\n"
             "\r\n"
             "Hello, World!\r\n";
         message msg;
         msg.line_policy(mailxx::codec::line_len_policy_t::MANDATORY);
-        msg.parse(msg_str);
+        if (!require_ok(msg.parse(msg_str), "parse"))
+            return EXIT_FAILURE;
         cout << msg.subject() << endl;
-        // The subject is printed as `Здраво, Свете!` in the UTF-8 encoding.
+        // The subject is printed as `Hello, World!` in the UTF-8 encoding.
     }
 
     return EXIT_SUCCESS;
 }
-

@@ -129,6 +129,11 @@ enum class errc : std::uint32_t
     imap_parse_error,
     imap_continuation_expected,
 
+    pool_invalid_state,
+    pool_timeout,
+    pool_exhausted,
+    pool_config_error,
+
     codec_invalid_input,
     mime_parse_error,
 };
@@ -167,6 +172,10 @@ enum class errc : std::uint32_t
         case errc::imap_tagged_bad: return "imap_tagged_bad";
         case errc::imap_parse_error: return "imap_parse_error";
         case errc::imap_continuation_expected: return "imap_continuation_expected";
+        case errc::pool_invalid_state: return "pool_invalid_state";
+        case errc::pool_timeout: return "pool_timeout";
+        case errc::pool_exhausted: return "pool_exhausted";
+        case errc::pool_config_error: return "pool_config_error";
         case errc::codec_invalid_input: return "codec_invalid_input";
         case errc::mime_parse_error: return "mime_parse_error";
     }

@@ -20,10 +20,9 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 
 #include <string>
 #include <string_view>
-#include <stdexcept>
 #include <algorithm>
 #include <boost/algorithm/string.hpp>
-#include <mailxx/export.hpp>
+#include <mailxx/config.hpp>
 
 
 namespace mailxx
@@ -411,33 +410,6 @@ protected:
     Strict mode for encoding/decoding.
     **/
     bool strict_mode_;
-};
-
-
-/**
-Error thrown by codecs.
-**/
-class codec_error : public std::runtime_error
-{
-public:
-
-    /**
-    Calling parent constructor.
-
-    @param msg Error message.
-    **/
-    explicit codec_error(const std::string& msg) : std::runtime_error(msg)
-    {
-    }
-
-    /**
-    Calling parent constructor.
-
-    @param msg Error message.
-    **/
-    explicit codec_error(const char* msg) : std::runtime_error(msg)
-    {
-    }
 };
 
 

@@ -37,6 +37,5 @@ export import mailxx.mime;
 // Export POP3 headers
 export {
     #include <mailxx/pop3/types.hpp>
-    #include <mailxx/pop3/error.hpp>
     #include <mailxx/pop3/client.hpp>
 }

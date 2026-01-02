@@ -20,10 +20,10 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <array>
 #include <charconv>
 #include <system_error>
+#include <exception>
 #include <vector>
 #include <list>
 #include <utility>
-#include <stdexcept>
 #include <memory>
 #include <tuple>
 #include <istream>
@@ -44,13 +44,10 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/mime/mime.hpp>
 #include <mailxx/mime/mailboxes.hpp>
 #include <mailxx/detail/ascii.hpp>
-#include <mailxx/config.hpp>
 #include <mailxx/detail/result.hpp>
 #include <mailxx/detail/output_sink.hpp>
-#if MAILXX_THROWING_ENABLED
-#include <mailxx/throwing.hpp>
-#endif
-#include <mailxx/export.hpp>
+
+#include <mailxx/config.hpp>
 
 
 namespace mailxx
@@ -136,43 +133,18 @@ public:
 
     @param message_str Resulting message as string.
     @param opts        Options to customize formatting.
-    @throw *           `format_header(format_options)`, `format_content(bool)`, `mime::format(string&, bool)`.
+    @return            Success or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    void format(std::string& message_str, const message_format_options_t& opts = message_format_options_t{}) const;
-#else
-    void format(std::string& message_str, const message_format_options_t& opts = message_format_options_t{}) const = delete;
-#endif
+    result_void format(std::string& message_str, const message_format_options_t& opts = message_format_options_t{}) const;
 
     /**
     Formatting the message directly to an output sink without buffering.
 
     @param sink Output sink to write the formatted message.
     @param opts Options to customize formatting.
-    **/
-#if MAILXX_THROWING_ENABLED
-    void format_to(detail::output_sink& sink, const message_format_options_t& opts = message_format_options_t{}) const;
-#else
-    void format_to(detail::output_sink& sink, const message_format_options_t& opts = message_format_options_t{}) const = delete;
-#endif
-
-    /**
-    Formatting the message to a string and returning result on error.
-
-    @param message_str Resulting message as string.
-    @param opts        Options to customize formatting.
-    @return            Success or error.
-    **/
-    result_void format_result(std::string& message_str, const message_format_options_t& opts = message_format_options_t{}) const;
-
-    /**
-    Formatting the message to an output sink and returning result on error.
-
-    @param sink Output sink to write the formatted message.
-    @param opts Options to customize formatting.
     @return     Success or error.
     **/
-    result_void format_to_result(detail::output_sink& sink, const message_format_options_t& opts = message_format_options_t{}) const;
+    result_void format_to(detail::output_sink& sink, const message_format_options_t& opts = message_format_options_t{}) const;
 
     /**
     Overload of `format(string&, const message_format_options&)`.
@@ -180,11 +152,6 @@ public:
     Because of the way the u8string is comverted to string, it's more expensive when used with C++20.
     **/
 #if defined(__cpp_char8_t)
-#if MAILXX_THROWING_ENABLED
-    void format(std::u8string& message_str, const message_format_options_t& = message_format_options_t{}) const;
-#else
-    void format(std::u8string& message_str, const message_format_options_t& = message_format_options_t{}) const = delete;
-#endif
 
     /**
     Formatting the message to a u8string and returning result on error.
@@ -193,24 +160,17 @@ public:
     @param opts        Options to customize formatting.
     @return            Success or error.
     **/
-    result_void format_result(std::u8string& message_str, const message_format_options_t& opts = message_format_options_t{}) const;
+    result_void format(std::u8string& message_str, const message_format_options_t& opts = message_format_options_t{}) const;
 #endif
 
     /**
-    Parsing a message from a string.
-
-    Essentially, the method calls the same one from `mime` and checks for errors.
+    Parsing a message from a string into this instance.
 
     @param message_str   String to parse.
     @param dot_escape    Flag if the leading dot should be escaped.
-    @throw message_error No author address.
-    @throw *             `mime::parse(const string&, bool)`.
+    @return              Success or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    void parse(const std::string& message_str, bool dot_escape = false);
-#else
-    void parse(const std::string& message_str, bool dot_escape = false) = delete;
-#endif
+    result_void parse(const std::string& message_str, bool dot_escape = false);
 
     /**
     Overload of `parse(const string&, bool)`.
@@ -218,29 +178,8 @@ public:
     Because of the way the u8string is comverted to string, it's more expensive when used with C++20.
     **/
 #if defined(__cpp_char8_t)
-#if MAILXX_THROWING_ENABLED
-    void parse(const std::u8string& mime_string, bool dot_escape = false);
-#else
-    void parse(const std::u8string& mime_string, bool dot_escape = false) = delete;
+    result_void parse(const std::u8string& message_str, bool dot_escape = false);
 #endif
-#endif
-
-    /**
-    Parsing a message from a string and return result instead of throwing.
-
-    @param raw          Raw message string to parse.
-    @return             Result containing message or error.
-    **/
-    static result<message> parse_result(std::string_view raw);
-
-    /**
-    Parsing a message from a string and return result instead of throwing.
-
-    @param raw          Raw message string to parse.
-    @param dot_escape   Flag if the leading dot should be escaped.
-    @return             Result containing message or error.
-    **/
-    static result<message> parse_result(std::string_view raw, bool dot_escape);
 
     /**
     Checking if the mail is empty.
@@ -275,16 +214,9 @@ public:
     /**
     Formatting the author as string.
 
-    @return  Author name and address as formatted string.
-    @throw * `format_address(const string&, const string&)`.
+    @return  Author name and address as formatted string or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    std::string from_to_string() const;
-#else
-    std::string from_to_string() const = delete;
-#endif
-
-    result<std::string> from_to_string_result() const;
+    result<std::string> from_to_string() const;
 
     /**
     Setting the sender to the given address.
@@ -303,16 +235,9 @@ public:
     /**
     Formatting the sender as string.
 
-    @return  Sender name and address as formatted string.
-    @throw * `format_address(const string&, const string&)`.
+    @return  Sender name and address as formatted string or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    std::string sender_to_string() const;
-#else
-    std::string sender_to_string() const = delete;
-#endif
-
-    result<std::string> sender_to_string_result() const;
+    result<std::string> sender_to_string() const;
 
     /**
     Setting the reply address.
@@ -331,16 +256,9 @@ public:
     /**
     Formatting the reply name and address as string.
 
-    @return  Reply name and address as string.
-    @throw * `format_address(const string&, const string&)`.
+    @return  Reply name and address as string or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    std::string reply_address_to_string() const;
-#else
-    std::string reply_address_to_string() const = delete;
-#endif
-
-    result<std::string> reply_address_to_string_result() const;
+    result<std::string> reply_address_to_string() const;
 
     /**
     Adding a recipent name and address.
@@ -366,16 +284,9 @@ public:
     /**
     Getting the recipients names and addresses as string.
 
-    @return  Recipients names and addresses as string.
-    @throw * `format_mailbox`.
+    @return  Recipients names and addresses as string or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    std::string recipients_to_string() const;
-#else
-    std::string recipients_to_string() const = delete;
-#endif
-
-    result<std::string> recipients_to_string_result() const;
+    result<std::string> recipients_to_string() const;
 
     /**
     Adding a CC recipent name and address.
@@ -401,16 +312,9 @@ public:
     /**
     Getting the CC recipients names and addresses as string.
 
-    @return  CC recipients names and addresses as string.
-    @throw * `format_mailbox`.
+    @return  CC recipients names and addresses as string or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    std::string cc_recipients_to_string() const;
-#else
-    std::string cc_recipients_to_string() const = delete;
-#endif
-
-    result<std::string> cc_recipients_to_string_result() const;
+    result<std::string> cc_recipients_to_string() const;
 
     /**
     Adding a BCC recipent name and address.
@@ -436,16 +340,9 @@ public:
     /**
     Getting the BCC recipients names and addresses as string.
 
-    @return  BCC recipients names and addresses as string.
-    @throw * `format_mailbox`.
+    @return  BCC recipients names and addresses as string or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    std::string bcc_recipients_to_string() const;
-#else
-    std::string bcc_recipients_to_string() const = delete;
-#endif
-
-    result<std::string> bcc_recipients_to_string_result() const;
+    result<std::string> bcc_recipients_to_string() const;
 
     /**
     Setting the disposition notification mail address.
@@ -464,30 +361,17 @@ public:
     /**
     Getting the disposition notification mail address as string.
 
-    @return  Disposition notification mail address as string.
-    @throw * `format_address(const string&, const string&)`.
+    @return  Disposition notification mail address as string or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    std::string disposition_notification_to_string() const;
-#else
-    std::string disposition_notification_to_string() const = delete;
-#endif
-
-    result<std::string> disposition_notification_to_string_result() const;
+    result<std::string> disposition_notification_to_string() const;
 
     /**
     Setting the message ID.
 
     @param id            The message ID in the format `string1@string2`.
-    @throw message_error Invalid message ID.
+    @return              Success or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    void message_id(std::string id);
-#else
-    void message_id(std::string id) = delete;
-#endif
-
-    result_void message_id_result(std::string id);
+    result_void message_id(std::string id);
 
     /**
     Getting the message ID.
@@ -500,14 +384,9 @@ public:
     Adding the in-reply-to ID.
 
     @param in-reply ID of the in-reply-to header.
+    @return         Success or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    void add_in_reply_to(const std::string& in_reply);
-#else
-    void add_in_reply_to(const std::string& in_reply) = delete;
-#endif
-
-    result_void add_in_reply_to_result(const std::string& in_reply);
+    result_void add_in_reply_to(const std::string& in_reply);
 
     /**
     Getting the in-reply-to ID.
@@ -520,14 +399,9 @@ public:
     Adding the reference ID to the list.
 
     @param reference_id Reference ID.
+    @return             Success or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    void add_references(const std::string& reference_id);
-#else
-    void add_references(const std::string& reference_id) = delete;
-#endif
-
-    result_void add_references_result(const std::string& reference_id);
+    result_void add_references(const std::string& reference_id);
 
     /**
     Getting the references list of IDs.
@@ -604,10 +478,9 @@ public:
     RFC 2046 section 5.1. The consequence is that the content remains empty afterwards.
 
     @param attachments Files to attach. Each tuple consists of a stream, attachment name and content type.
-    @throw *           `mime::content_type(const content_type_t&)`, `mime::content_transfer_encoding(content_transfer_encoding_t)`,
-                       `mime::content_disposition(content_disposition_t)`.
+    @return            Success or error.
     **/
-    void attach(const std::list<std::tuple<std::istream&, string_t, content_type_t>>& attachments);
+    result_void attach(const std::list<std::tuple<std::istream&, string_t, content_type_t>>& attachments);
 
     /**
     Attaches a file path without loading it into memory. The payload is streamed
@@ -617,8 +490,9 @@ public:
     @param name Attachment name.
     @param ct   Content type to set.
     @param enc  Transfer encoding to use (Base64 by default).
+    @return     Success or error.
     **/
-    void attach_file(const std::filesystem::path& path, string_t name, content_type_t ct,
+    result_void attach_file(const std::filesystem::path& path, string_t name, content_type_t ct,
         content_transfer_encoding_t enc = content_transfer_encoding_t::BASE_64);
 
     /**
@@ -634,16 +508,10 @@ public:
     @param index         Index of the attachment.
     @param att_strm      Stream to write the attachment.
     @param att_name      Name of the attachment.
-    @throw message_error Bad attachment index.
+    @return              Success or error.
     @todo                The attachment name should be also `string_t`.
     **/
-#if MAILXX_THROWING_ENABLED
-    void attachment(std::size_t index, std::ostream& att_strm, string_t& att_name) const;
-#else
-    void attachment(std::size_t index, std::ostream& att_strm, string_t& att_name) const = delete;
-#endif
-
-    result_void attachment_result(std::size_t index, std::ostream& att_strm, string_t& att_name) const;
+    result_void attachment(std::size_t index, std::ostream& att_strm, string_t& att_name) const;
 
     /**
     Adding another header.
@@ -654,13 +522,8 @@ public:
     @param value Header value.
     @todo        Disallowing standard headers defined elsewhere?
     **/
-#if MAILXX_THROWING_ENABLED
-    void add_header(const std::string& name, const std::string& value);
-#else
-    void add_header(const std::string& name, const std::string& value) = delete;
-#endif
 
-    result_void add_header_result(const std::string& name, const std::string& value);
+    result_void add_header(const std::string& name, const std::string& value);
 
     /**
     Removing another header.
@@ -758,30 +621,17 @@ protected:
     /**
     Formatting the header to a string.
 
-    @return              Header as string.
-    @throw message_error No boundary for multipart message.
-    @throw message_error No author.
-    @throw message_error No sender for multiple authors.
-    @throw *             `mime::format_header()`.
+    @return              Header as string or error.
     **/
-#if MAILXX_THROWING_ENABLED
-    virtual std::string format_header(bool add_bcc_header) const;
-#else
-    virtual std::string format_header(bool add_bcc_header) const = delete;
-#endif
-
-    result<std::string> format_header_result(bool add_bcc_header) const;
+    result<std::string> format_header(bool add_bcc_header) const;
 
     /**
     Parsing a header line for a specific header.
 
     @param header_line   Header line to be parsed.
-    @throw message_error Line policy overflow in a header.
-    @throw message_error Empty author header.
-    @throw *             `mime::parse_header_line(const string&)`, `mime::parse_header_name_value(const string&, string&, string&)`,
-                         `parse_address_list(const string&)`, `parse_subject(const string&)`, `parse_date(const string&)`.
+    @return              Result of parsing.
     **/
-    virtual void parse_header_line(const std::string& header_line);
+    virtual result_void parse_header_line(const std::string& header_line);
 
     /**
     Formatting a list of addresses to string.
@@ -789,9 +639,7 @@ protected:
     Multiple addresses are put into separate lines.
 
     @param mailbox_list  Mailbox to format.
-    @return              Mailbox as string.
-    @throw message_error Formatting failure of address list, bad group name.
-    @throw *             `format_address(const string&, const string&)`.
+    @return              Mailbox as string or error.
     **/
     result<std::string> format_address_list(const mailboxes& mailbox_list, const std::string& header_name = "") const;
 
@@ -804,9 +652,7 @@ protected:
     @param name          Mail name.
     @param address       Mail address.
     @param header_name   Header name of the address header.
-    @return              The mail name and address formatted.
-    @throw message_error Formatting failure of name.
-    @throw message_error Formatting failure of address.
+    @return              The mail name and address formatted or error.
     **/
     result<std::string> format_address(const string_t& name, const std::string& address, const std::string& header_name) const;
 
@@ -820,28 +666,22 @@ protected:
     /**
     Formatting email date.
 
-    @return Date for the email format.
+    @return Date for the email format or error.
     **/
-    std::string format_date() const;
+    result<std::string> format_date() const;
 
     /**
     Formatting email date header.
 
-    @return Date header for the email format.
+    @return Date header for the email format or error.
     **/
-    std::string format_date_header() const;
+    result<std::string> format_date_header() const;
 
     /**
     Parsing a string into vector of names and addresses.
 
     @param address_list  String to parse.
-    @return              Vector of names and addresses.
-    @throw message_error Parsing failure of address or group at.
-    @throw message_error Parsing failure of group at.
-    @throw message_error Parsing failure of name or address at.
-    @throw message_error Parsing failure of address at.
-    @throw message_error Parsing failure of name at.
-    @throw message_error Parsing failure of comment at.
+    @return              Vector of names and addresses or error.
     **/
     result<mailboxes> parse_address_list(const std::string& address_list);
 
@@ -849,8 +689,7 @@ protected:
     Parsing a string into date and time.
 
     @param date_str      Date string to parse.
-    @return              Date and time translated to local time zone.
-    @throw message_error Parsing failure of date.
+    @return              Date and time translated to local time zone or error.
     **/
     result<std::chrono::zoned_time<std::chrono::seconds>> parse_date(const std::string& date_str) const;
 
@@ -868,9 +707,7 @@ protected:
     The result is string either ASCII or UTF-8 encoded. If another encoding is used like ISO-8859-X, then the result is undefined.
 
     @param subject       Subject to parse.
-    @return              Parsed subject and charset.
-    @throw message_error Parsing failure of Q encoding.
-    @throw *             `q_codec::decode(const string&)`.
+    @return              Parsed subject and charset or error.
     **/
     result<std::tuple<std::string, std::string, codec::codec_t>>
     parse_subject(const std::string& subject);
@@ -881,8 +718,7 @@ protected:
     The result is string ASCII or UTF-8 encoded. If another encoding is used, then it should be decoded by the method caller.
 
     @param address_name  Name part of mail.
-    @return              Parsed name part of the address.
-    @throw message_error Inconsistent Q encodings.
+    @return              Parsed name part of the address or error.
     @todo                Not tested with charsets different than ASCII and UTF-8.
     @todo                Throwing errors when Q codec is invalid?
     **/
@@ -958,10 +794,6 @@ protected:
     std::optional<error_info> parse_error_;
 };
 
-[[deprecated]]
-typedef mime_error message_error;
-
-
 // ------------------------------------------------------------
 // Header-only implementation (C++23)
 // ------------------------------------------------------------
@@ -973,93 +805,59 @@ inline message::message() : mime(), date_time_(std::chrono::current_zone(),
 }
 
 
-result_void inline message::format_to_result(detail::output_sink& sink, const message_format_options_t& opts) const
+result_void inline message::format_to(detail::output_sink& sink, const message_format_options_t& opts) const
 {
-    try
-    {
-        std::string header;
-        MAILXX_TRY_ASSIGN(header, format_header_result(opts.add_bcc_header));
-        sink.write(header);
+    std::string header;
+    MAILXX_TRY_ASSIGN(header, format_header(opts.add_bcc_header));
+    sink.write(header);
 
-        if (!parts_.empty())
+    if (!parts_.empty())
+    {
+        const auto& boundary = content_type_.boundary();
+
+        if (!content_.empty())
         {
-            const auto& boundary = content_type_.boundary();
-
-            if (!content_.empty())
-            {
-                mime content_part;
-                content_part.content(content_);
-                content_type_t ct(media_type_t::TEXT, "plain", content_type_.charset());
-                content_part.content_type(ct);
-                content_part.content_transfer_encoding(encoding_);
-                content_part.line_policy(line_policy_);
-                content_part.strict_mode(strict_mode_);
-                content_part.strict_codec_mode(strict_codec_mode_);
-                sink.write(BOUNDARY_DELIMITER + boundary + codec::END_OF_LINE);
-                content_part.format_to(sink, opts.dot_escape);
-                sink.write(codec::END_OF_LINE);
-            }
-
-            // Recursively format mime parts.
-
-            for (const auto& p: parts_)
-            {
-                sink.write(BOUNDARY_DELIMITER + boundary + codec::END_OF_LINE);
-                p.format_to(sink, opts.dot_escape);
-                sink.write(codec::END_OF_LINE);
-            }
-            sink.write(BOUNDARY_DELIMITER + boundary + BOUNDARY_DELIMITER + codec::END_OF_LINE);
+            mime content_part;
+            content_part.content(content_);
+            content_type_t ct(media_type_t::TEXT, "plain", content_type_.charset());
+            MAILXX_TRY(content_part.content_type(ct));
+            content_part.content_transfer_encoding(encoding_);
+            content_part.line_policy(line_policy_);
+            content_part.strict_mode(strict_mode_);
+            content_part.strict_codec_mode(strict_codec_mode_);
+            sink.write(BOUNDARY_DELIMITER + boundary + codec::END_OF_LINE);
+            MAILXX_TRY(content_part.format_to(sink, opts.dot_escape));
+            sink.write(codec::END_OF_LINE);
         }
-        else
-            sink.write(format_content(opts.dot_escape));
 
-        return ok();
-    }
-    catch (const mime_error& exc)
-    {
-        std::string detail = exc.what();
-        std::string extra = exc.details();
-        if (!extra.empty())
+        // Recursively format mime parts.
+
+        for (const auto& p: parts_)
         {
-            if (!detail.empty())
-                detail += ": ";
-            detail += extra;
+            sink.write(BOUNDARY_DELIMITER + boundary + codec::END_OF_LINE);
+            MAILXX_TRY(p.format_to(sink, opts.dot_escape));
+            sink.write(codec::END_OF_LINE);
         }
-        return fail_void(errc::mime_parse_error, "mime format error", std::move(detail));
+        sink.write(BOUNDARY_DELIMITER + boundary + BOUNDARY_DELIMITER + codec::END_OF_LINE);
     }
-    catch (const std::exception& exc)
+    else
     {
-        return fail_void(errc::mime_parse_error, "mime format error", exc.what());
+        std::string content;
+        MAILXX_TRY_ASSIGN(content, format_content(opts.dot_escape));
+        sink.write(content);
     }
-    catch (...)
-    {
-        return fail_void(errc::mime_parse_error, "mime format error", "unknown error");
-    }
+
+    return ok();
 }
 
-#if MAILXX_THROWING_ENABLED
-void inline message::format_to(detail::output_sink& sink, const message_format_options_t& opts) const
-{
-    mailxx::unwrap(format_to_result(sink, opts));
-}
-#endif
-
-result_void inline message::format_result(std::string& message_str, const message_format_options_t& opts) const
+result_void inline message::format(std::string& message_str, const message_format_options_t& opts) const
 {
     detail::string_sink sink(message_str);
-    return format_to_result(sink, opts);
+    return format_to(sink, opts);
 }
-
-#if MAILXX_THROWING_ENABLED
-void inline message::format(std::string& message_str, const message_format_options_t& opts) const
-{
-    mailxx::unwrap(format_result(message_str, opts));
-}
-#endif
-
 
 #if defined(__cpp_char8_t)
-result_void inline message::format_result(std::u8string& message_str, const message_format_options_t& opts) const
+result_void inline message::format(std::u8string& message_str, const message_format_options_t& opts) const
 {
     // Convert existing buffer (if any) to std::string, append formatted message, then convert back.
     std::string tmp;
@@ -1067,7 +865,7 @@ result_void inline message::format_result(std::u8string& message_str, const mess
     for (char8_t c : message_str)
         tmp.push_back(static_cast<char>(c));
 
-    MAILXX_TRY(format_result(tmp, opts));
+    MAILXX_TRY(format(tmp, opts));
 
     message_str.clear();
     message_str.reserve(tmp.size());
@@ -1077,80 +875,41 @@ result_void inline message::format_result(std::u8string& message_str, const mess
     return ok();
 }
 
-#if MAILXX_THROWING_ENABLED
-void inline message::format(std::u8string& message_str, const message_format_options_t& opts) const
-{
-    mailxx::unwrap(format_result(message_str, opts));
-}
-#endif
 #endif
 
-
-
-#if MAILXX_THROWING_ENABLED
-void inline message::parse(const std::string& message_str, bool dot_escape)
-{
-    *this = mailxx::unwrap(parse_result(message_str, dot_escape));
-}
-#endif
-
-result<message> inline message::parse_result(std::string_view raw)
-{
-    return parse_result(raw, false);
-}
-
-result<message> inline message::parse_result(std::string_view raw, bool dot_escape)
+result_void inline message::parse(const std::string& message_str, bool dot_escape)
 {
     message msg;
-    try
+    msg.parse_error_.reset();
+    auto parse_res = msg.mime::parse(message_str, dot_escape);
+    if (!parse_res)
     {
-        msg.parse_error_.reset();
-        msg.mime::parse(std::string(raw), dot_escape);
-
-        if (msg.parse_error_)
-            return fail<message>(std::move(*msg.parse_error_));
-
-        if (msg.from_.addresses.empty())
-            return fail<message>(errc::mime_parse_error, "mime parse error", "No author address.");
-
-        // There is no check if there is a sender in case of multiple authors, not sure if that logic is needed.
-        return ok(std::move(msg));
-    }
-    catch (const mime_error& exc)
-    {
-        std::string detail = exc.what();
-        std::string extra = exc.details();
-        if (!extra.empty())
+        const error_info& err = parse_res.error();
+        std::string detail = err.message;
+        if (!err.detail.empty())
         {
             if (!detail.empty())
                 detail += ": ";
-            detail += extra;
+            detail += err.detail;
         }
-        return fail<message>(errc::mime_parse_error, "mime parse error", std::move(detail));
+        return fail_void(errc::mime_parse_error, "mime parse error", std::move(detail));
     }
-    catch (const std::exception& exc)
-    {
-        return fail<message>(errc::mime_parse_error, "mime parse error", exc.what());
-    }
-    catch (...)
-    {
-        return fail<message>(errc::mime_parse_error, "mime parse error", "unknown error");
-    }
-}
 
+    if (msg.parse_error_)
+        return fail_void(std::move(*msg.parse_error_));
+
+    if (msg.from_.addresses.empty())
+        return fail_void(errc::mime_parse_error, "mime parse error", "No author address.");
+
+    *this = std::move(msg);
+    return ok();
+}
 
 #if defined(__cpp_char8_t)
-#if MAILXX_THROWING_ENABLED
-void inline message::parse(const std::u8string& message_str, bool dot_escape)
+result_void inline message::parse(const std::u8string& message_str, bool dot_escape)
 {
-    std::string tmp;
-    tmp.reserve(message_str.size());
-    for (char8_t c : message_str)
-        tmp.push_back(static_cast<char>(c));
-
-    parse(tmp, dot_escape);
+    return parse(reinterpret_cast<const char*>(message_str.c_str()), dot_escape);
 }
-#endif
 #endif
 
 
@@ -1179,15 +938,7 @@ void inline message::add_from(const mail_address& mail)
     from_.addresses.push_back(mail);
 }
 
-
-#if MAILXX_THROWING_ENABLED
-std::string inline message::from_to_string() const
-{
-    return mailxx::unwrap(from_to_string_result());
-}
-#endif
-
-result<std::string> inline message::from_to_string_result() const
+result<std::string> inline message::from_to_string() const
 {
     return format_address_list(from_, std::string(FROM_HEADER));
 }
@@ -1204,15 +955,7 @@ mail_address inline message::sender() const
     return sender_;
 }
 
-
-#if MAILXX_THROWING_ENABLED
-std::string inline message::sender_to_string() const
-{
-    return mailxx::unwrap(sender_to_string_result());
-}
-#endif
-
-result<std::string> inline message::sender_to_string_result() const
+result<std::string> inline message::sender_to_string() const
 {
     return format_address(sender_.name, sender_.address, std::string(SENDER_HEADER) + HEADER_SEPARATOR_STR);
 }
@@ -1228,15 +971,7 @@ mail_address inline message::reply_address() const
     return reply_address_;
 }
 
-
-#if MAILXX_THROWING_ENABLED
-std::string inline message::reply_address_to_string() const
-{
-    return mailxx::unwrap(reply_address_to_string_result());
-}
-#endif
-
-result<std::string> inline message::reply_address_to_string_result() const
+result<std::string> inline message::reply_address_to_string() const
 {
     return format_address(reply_address_.name, reply_address_.address, std::string(REPLY_TO_HEADER) + HEADER_SEPARATOR_STR);
 }
@@ -1259,15 +994,7 @@ mailboxes inline message::recipients() const
     return recipients_;
 }
 
-
-#if MAILXX_THROWING_ENABLED
-std::string inline message::recipients_to_string() const
-{
-    return mailxx::unwrap(recipients_to_string_result());
-}
-#endif
-
-result<std::string> inline message::recipients_to_string_result() const
+result<std::string> inline message::recipients_to_string() const
 {
     return format_address_list(recipients_, std::string(TO_HEADER));
 }
@@ -1290,15 +1017,7 @@ mailboxes inline message::cc_recipients() const
     return cc_recipients_;
 }
 
-
-#if MAILXX_THROWING_ENABLED
-std::string inline message::cc_recipients_to_string() const
-{
-    return mailxx::unwrap(cc_recipients_to_string_result());
-}
-#endif
-
-result<std::string> inline message::cc_recipients_to_string_result() const
+result<std::string> inline message::cc_recipients_to_string() const
 {
     return format_address_list(cc_recipients_, std::string(CC_HEADER));
 }
@@ -1321,15 +1040,7 @@ mailboxes inline message::bcc_recipients() const
     return bcc_recipients_;
 }
 
-
-#if MAILXX_THROWING_ENABLED
-std::string inline message::bcc_recipients_to_string() const
-{
-    return mailxx::unwrap(bcc_recipients_to_string_result());
-}
-#endif
-
-result<std::string> inline message::bcc_recipients_to_string_result() const
+result<std::string> inline message::bcc_recipients_to_string() const
 {
     return format_address_list(bcc_recipients_, std::string(BCC_HEADER));
 }
@@ -1346,29 +1057,13 @@ mail_address inline message::disposition_notification() const
     return disposition_notification_;
 }
 
-
-#if MAILXX_THROWING_ENABLED
-std::string inline message::disposition_notification_to_string() const
-{
-    return mailxx::unwrap(disposition_notification_to_string_result());
-}
-#endif
-
-result<std::string> inline message::disposition_notification_to_string_result() const
+result<std::string> inline message::disposition_notification_to_string() const
 {
     return format_address(disposition_notification_.name, disposition_notification_.address,
         std::string(DISPOSITION_NOTIFICATION_HEADER) + HEADER_SEPARATOR_STR);
 }
 
-
-#if MAILXX_THROWING_ENABLED
-void inline message::message_id(std::string id)
-{
-    mailxx::unwrap(message_id_result(std::move(id)));
-}
-#endif
-
-result_void inline message::message_id_result(std::string id)
+result_void inline message::message_id(std::string id)
 {
     // Normalize: trim and optionally strip surrounding angle brackets.
     detail::trim_inplace(id);
@@ -1391,15 +1086,7 @@ std::string inline message::message_id() const
     return message_id_;
 }
 
-
-#if MAILXX_THROWING_ENABLED
-void inline message::add_in_reply_to(const std::string& in_reply)
-{
-    mailxx::unwrap(add_in_reply_to_result(in_reply));
-}
-#endif
-
-result_void inline message::add_in_reply_to_result(const std::string& in_reply)
+result_void inline message::add_in_reply_to(const std::string& in_reply)
 {
     std::string id = in_reply;
     detail::trim_inplace(id);
@@ -1421,15 +1108,7 @@ std::vector<std::string> inline message::in_reply_to() const
     return in_reply_to_;
 }
 
-
-#if MAILXX_THROWING_ENABLED
-void inline message::add_references(const std::string& reference_id)
-{
-    mailxx::unwrap(add_references_result(reference_id));
-}
-#endif
-
-result_void inline message::add_references_result(const std::string& reference_id)
+result_void inline message::add_references(const std::string& reference_id)
 {
     std::string id = reference_id;
     detail::trim_inplace(id);
@@ -1511,7 +1190,7 @@ void inline message::date_time(const std::chrono::zoned_time<std::chrono::second
 }
 
 
-void inline message::attach(const std::list<std::tuple<std::istream&, string_t, content_type_t>>& attachments)
+result_void inline message::attach(const std::list<std::tuple<std::istream&, string_t, content_type_t>>& attachments)
 {
     std::string bound;
     if (content_type_.boundary().empty())
@@ -1531,7 +1210,7 @@ void inline message::attach(const std::list<std::tuple<std::istream&, string_t, 
         mime content_part;
         content_part.content(content_);
         auto part_ct = content_type_t(content_type_.media_type(), content_type_.media_subtype(), content_type_.charset());
-        content_part.content_type(part_ct);
+        MAILXX_TRY(content_part.content_type(part_ct));
         content_part.content_transfer_encoding(encoding_);
         content_part.line_policy(line_policy_);
         content_part.strict_mode(strict_mode_);
@@ -1549,7 +1228,7 @@ void inline message::attach(const std::list<std::tuple<std::istream&, string_t, 
 
         mime m;
         m.line_policy(line_policy_);
-        m.content_type(content_type_t(std::get<2>(att)));
+        MAILXX_TRY(m.content_type(content_type_t(std::get<2>(att))));
         // content type charset is not set, so it will be treated as us-ascii
         m.content_transfer_encoding(content_transfer_encoding_t::BASE_64);
         m.content_disposition(content_disposition_t::ATTACHMENT);
@@ -1557,9 +1236,11 @@ void inline message::attach(const std::list<std::tuple<std::istream&, string_t, 
         m.content(ss.str());
         parts_.push_back(m);
     }
+
+    return ok();
 }
 
-void inline message::attach_file(const std::filesystem::path& path, string_t name, content_type_t ct,
+result_void inline message::attach_file(const std::filesystem::path& path, string_t name, content_type_t ct,
     content_transfer_encoding_t enc)
 {
     std::string bound;
@@ -1579,7 +1260,7 @@ void inline message::attach_file(const std::filesystem::path& path, string_t nam
         mime content_part;
         content_part.content(content_);
         auto part_ct = content_type_t(content_type_.media_type(), content_type_.media_subtype(), content_type_.charset());
-        content_part.content_type(part_ct);
+        MAILXX_TRY(content_part.content_type(part_ct));
         content_part.content_transfer_encoding(encoding_);
         content_part.line_policy(line_policy_);
         content_part.strict_mode(strict_mode_);
@@ -1593,7 +1274,7 @@ void inline message::attach_file(const std::filesystem::path& path, string_t nam
 
     mime m;
     m.line_policy(line_policy_);
-    m.content_type(ct);
+    MAILXX_TRY(m.content_type(ct));
     m.content_transfer_encoding(enc);
     m.content_disposition(content_disposition_t::ATTACHMENT);
     m.name(std::move(name));
@@ -1604,6 +1285,8 @@ void inline message::attach_file(const std::filesystem::path& path, string_t nam
     m.strict_mode(strict_mode_);
     m.strict_codec_mode(strict_codec_mode_);
     parts_.push_back(std::move(m));
+
+    return ok();
 }
 
 
@@ -1614,15 +1297,7 @@ std::size_t inline message::attachments_size() const
     });
 }
 
-
-#if MAILXX_THROWING_ENABLED
-void inline message::attachment(std::size_t index, std::ostream& att_strm, string_t& att_name) const
-{
-    mailxx::unwrap(attachment_result(index, att_strm, att_name));
-}
-#endif
-
-result_void inline message::attachment_result(std::size_t index, std::ostream& att_strm, string_t& att_name) const
+result_void inline message::attachment(std::size_t index, std::ostream& att_strm, string_t& att_name) const
 {
     if (index == 0)
         return fail_void(errc::mime_parse_error, "Bad attachment index.", "");
@@ -1670,14 +1345,8 @@ result_void inline message::attachment_result(std::size_t index, std::ostream& a
     return fail_void(errc::mime_parse_error, "Bad attachment index.",
         "Given index is " + std::to_string(index) + ", number of attachments is " + std::to_string(no) + ".");
 }
-#if MAILXX_THROWING_ENABLED
-void inline message::add_header(const std::string& name, const std::string& value)
-{
-    mailxx::unwrap(add_header_result(name, value));
-}
-#endif
 
-result_void inline message::add_header_result(const std::string& name, const std::string& value)
+result_void inline message::add_header(const std::string& name, const std::string& value)
 {
     if (!detail::is_valid_header_name(name))
         return fail_void(errc::mime_parse_error, "Header name format error.", "Name is `" + name + "`.");
@@ -1700,177 +1369,209 @@ inline const message::headers_t& message::headers() const
 }
 
 
-result<std::string> inline message::format_header_result(bool add_bcc_header) const
+result<std::string> inline message::format_header(bool add_bcc_header) const
 {
-    try
+    if (!content_type_.boundary().empty() && content_type_.media_type() != media_type_t::MULTIPART)
+        return fail<std::string>(errc::mime_parse_error, "No boundary for multipart message.", "");
+
+    if (from_.addresses.size() == 0)
+        return fail<std::string>(errc::mime_parse_error, "No author.", "");
+
+    if (from_.addresses.size() > 1 && sender_.empty())
+        return fail<std::string>(errc::mime_parse_error, "No sender for multiple authors.", "");
+
+    std::string header;
+    for (const auto& hdr : headers_)
     {
-        if (!content_type_.boundary().empty() && content_type_.media_type() != media_type_t::MULTIPART)
-            return fail<std::string>(errc::mime_parse_error, "No boundary for multipart message.", "");
-
-        if (from_.addresses.size() == 0)
-            return fail<std::string>(errc::mime_parse_error, "No author.", "");
-
-        if (from_.addresses.size() > 1 && sender_.empty())
-            return fail<std::string>(errc::mime_parse_error, "No sender for multiple authors.", "");
-
-        std::string header;
-        for (const auto& hdr : headers_)
-        {
-            std::string::size_type l1p = static_cast<std::string::size_type>(line_policy_) - hdr.first.length() - HEADER_SEPARATOR_STR.length();
-            bit7 b7(l1p, static_cast<std::string::size_type>(line_policy_));
-            auto hdr_enc = b7.encode(hdr.second);
-            if (!hdr_enc)
-                return fail<std::string>(std::move(hdr_enc).error());
-            if (hdr_enc->empty())
-                return fail<std::string>(errc::mime_parse_error, "Header value format error.", "Header is `" + hdr.first + "`.");
-            header += hdr.first + HEADER_SEPARATOR_STR + hdr_enc->at(0) + codec::END_OF_LINE;
-            header += fold_header_line(*hdr_enc);
-        }
-
-        std::string from_str;
-        MAILXX_TRY_ASSIGN(from_str, from_to_string_result());
-        header += std::string(FROM_HEADER) + HEADER_SEPARATOR_STR + from_str + codec::END_OF_LINE;
-
-        if (!sender_.address.empty())
-        {
-            std::string sender_str;
-            MAILXX_TRY_ASSIGN(sender_str, sender_to_string_result());
-            header += std::string(SENDER_HEADER) + HEADER_SEPARATOR_STR + sender_str + codec::END_OF_LINE;
-        }
-
-        if (!reply_address_.name.buffer.empty())
-        {
-            std::string reply_str;
-            MAILXX_TRY_ASSIGN(reply_str, reply_address_to_string_result());
-            header += std::string(REPLY_TO_HEADER) + HEADER_SEPARATOR_STR + reply_str + codec::END_OF_LINE;
-        }
-
-        std::string recipients_str;
-        MAILXX_TRY_ASSIGN(recipients_str, recipients_to_string_result());
-        header += std::string(TO_HEADER) + HEADER_SEPARATOR_STR + recipients_str + codec::END_OF_LINE;
-
-        if (!cc_recipients_.empty())
-        {
-            std::string cc_str;
-            MAILXX_TRY_ASSIGN(cc_str, cc_recipients_to_string_result());
-            header += std::string(CC_HEADER) + HEADER_SEPARATOR_STR + cc_str + codec::END_OF_LINE;
-        }
-
-        if (add_bcc_header && !bcc_recipients_.empty())
-        {
-            std::string bcc_str;
-            MAILXX_TRY_ASSIGN(bcc_str, bcc_recipients_to_string_result());
-            header += std::string(BCC_HEADER) + HEADER_SEPARATOR_STR + bcc_str + codec::END_OF_LINE;
-        }
-
-        if (!disposition_notification_.empty())
-        {
-            std::string disp_str;
-            MAILXX_TRY_ASSIGN(disp_str, disposition_notification_to_string_result());
-            header += std::string(DISPOSITION_NOTIFICATION_HEADER) + HEADER_SEPARATOR_STR + disp_str + codec::END_OF_LINE;
-        }
-
-        header += message_id_.empty() ? "" : std::string(MESSAGE_ID_HEADER) + HEADER_SEPARATOR_STR +
-            format_many_ids(message_id_, std::string(MESSAGE_ID_HEADER));
-        header += in_reply_to_.empty() ? "" : std::string(IN_REPLY_TO_HEADER) + HEADER_SEPARATOR_STR +
-            format_many_ids(in_reply_to_, std::string(IN_REPLY_TO_HEADER));
-        header += references_.empty() ? "" : std::string(REFERENCES_HEADER) + HEADER_SEPARATOR_STR +
-            format_many_ids(references_, std::string(REFERENCES_HEADER));
-
-        header += format_date_header();
-
-        if (!parts_.empty())
-            header += std::string(MIME_VERSION_HEADER) + HEADER_SEPARATOR_STR + version_ + codec::END_OF_LINE;
-        header += mime::format_header();
-
-        if (!subject_.buffer.empty())
-        {
-            std::string subject_str;
-            MAILXX_TRY_ASSIGN(subject_str, format_subject());
-            header += std::string(SUBJECT_HEADER) + HEADER_SEPARATOR_STR + subject_str + codec::END_OF_LINE;
-        }
-
-        return ok(std::move(header));
+        std::string::size_type l1p = static_cast<std::string::size_type>(line_policy_) - hdr.first.length() - HEADER_SEPARATOR_STR.length();
+        bit7 b7(l1p, static_cast<std::string::size_type>(line_policy_));
+        auto hdr_enc = b7.encode(hdr.second);
+        if (!hdr_enc)
+            return fail<std::string>(std::move(hdr_enc).error());
+        if (hdr_enc->empty())
+            return fail<std::string>(errc::mime_parse_error, "Header value format error.", "Header is `" + hdr.first + "`.");
+        header += hdr.first + HEADER_SEPARATOR_STR + hdr_enc->at(0) + codec::END_OF_LINE;
+        header += fold_header_line(*hdr_enc);
     }
-    catch (const mime_error& exc)
+
+    std::string from_str;
+    MAILXX_TRY_ASSIGN(from_str, from_to_string());
+    header += std::string(FROM_HEADER) + HEADER_SEPARATOR_STR + from_str + codec::END_OF_LINE;
+
+    if (!sender_.address.empty())
     {
-        std::string detail = exc.what();
-        std::string extra = exc.details();
-        if (!extra.empty())
+        std::string sender_str;
+        MAILXX_TRY_ASSIGN(sender_str, sender_to_string());
+        header += std::string(SENDER_HEADER) + HEADER_SEPARATOR_STR + sender_str + codec::END_OF_LINE;
+    }
+
+    if (!reply_address_.name.buffer.empty())
+    {
+        std::string reply_str;
+        MAILXX_TRY_ASSIGN(reply_str, reply_address_to_string());
+        header += std::string(REPLY_TO_HEADER) + HEADER_SEPARATOR_STR + reply_str + codec::END_OF_LINE;
+    }
+
+    std::string recipients_str;
+    MAILXX_TRY_ASSIGN(recipients_str, recipients_to_string());
+    header += std::string(TO_HEADER) + HEADER_SEPARATOR_STR + recipients_str + codec::END_OF_LINE;
+
+    if (!cc_recipients_.empty())
+    {
+        std::string cc_str;
+        MAILXX_TRY_ASSIGN(cc_str, cc_recipients_to_string());
+        header += std::string(CC_HEADER) + HEADER_SEPARATOR_STR + cc_str + codec::END_OF_LINE;
+    }
+
+    if (add_bcc_header && !bcc_recipients_.empty())
+    {
+        std::string bcc_str;
+        MAILXX_TRY_ASSIGN(bcc_str, bcc_recipients_to_string());
+        header += std::string(BCC_HEADER) + HEADER_SEPARATOR_STR + bcc_str + codec::END_OF_LINE;
+    }
+
+    if (!disposition_notification_.empty())
+    {
+        std::string disp_str;
+        MAILXX_TRY_ASSIGN(disp_str, disposition_notification_to_string());
+        header += std::string(DISPOSITION_NOTIFICATION_HEADER) + HEADER_SEPARATOR_STR + disp_str + codec::END_OF_LINE;
+    }
+
+    if (!message_id_.empty())
+    {
+        std::string msg_id;
+        MAILXX_TRY_ASSIGN(msg_id, format_many_ids(message_id_, std::string(MESSAGE_ID_HEADER)));
+        header += std::string(MESSAGE_ID_HEADER) + HEADER_SEPARATOR_STR + msg_id;
+    }
+    if (!in_reply_to_.empty())
+    {
+        std::string reply_id;
+        MAILXX_TRY_ASSIGN(reply_id, format_many_ids(in_reply_to_, std::string(IN_REPLY_TO_HEADER)));
+        header += std::string(IN_REPLY_TO_HEADER) + HEADER_SEPARATOR_STR + reply_id;
+    }
+    if (!references_.empty())
+    {
+        std::string refs;
+        MAILXX_TRY_ASSIGN(refs, format_many_ids(references_, std::string(REFERENCES_HEADER)));
+        header += std::string(REFERENCES_HEADER) + HEADER_SEPARATOR_STR + refs;
+    }
+
+    std::string date_hdr;
+    MAILXX_TRY_ASSIGN(date_hdr, format_date_header());
+    header += date_hdr;
+
+    if (!parts_.empty())
+        header += std::string(MIME_VERSION_HEADER) + HEADER_SEPARATOR_STR + version_ + codec::END_OF_LINE;
+    std::string mime_hdr;
+    MAILXX_TRY_ASSIGN(mime_hdr, mime::format_header());
+    header += mime_hdr;
+
+    if (!subject_.buffer.empty())
+    {
+        std::string subject_str;
+        MAILXX_TRY_ASSIGN(subject_str, format_subject());
+        header += std::string(SUBJECT_HEADER) + HEADER_SEPARATOR_STR + subject_str + codec::END_OF_LINE;
+    }
+
+    return ok(std::move(header));
+}
+
+result_void inline message::parse_header_line(const std::string& header_line)
+{
+    if (parse_error_)
+        return ok();
+
+    auto record_mime_error = [this](const error_info& err)
+    {
+        std::string detail = err.message;
+        if (!err.detail.empty())
         {
             if (!detail.empty())
                 detail += ": ";
-            detail += extra;
+            detail += err.detail;
         }
-        return fail<std::string>(errc::mime_parse_error, "mime format error", std::move(detail));
-    }
-    catch (const std::exception& exc)
+        record_parse_error(make_error(errc::mime_parse_error, "mime parse error", std::move(detail)));
+    };
+
+    std::string header_name, header_value;
+    auto header_res = parse_header_name_value(header_line, header_name, header_value);
+    if (!header_res)
     {
-        return fail<std::string>(errc::mime_parse_error, "mime format error", exc.what());
+        record_mime_error(header_res.error());
+        return ok();
     }
-    catch (...)
+
+    if (detail::iequals_ascii(header_name, CONTENT_TYPE_HEADER))
     {
-        return fail<std::string>(errc::mime_parse_error, "mime format error", "unknown error");
+        media_type_t media_type;
+        std::string media_subtype;
+        attributes_t attributes;
+        auto ct_res = parse_content_type(header_value, media_type, media_subtype, attributes);
+        if (!ct_res)
+        {
+            record_mime_error(ct_res.error());
+            return ok();
+        }
+        auto merge_res = merge_attributes(attributes);
+        if (!merge_res)
+        {
+            record_mime_error(merge_res.error());
+            return ok();
+        }
+
+        std::string media_subtype_lower = boost::to_lower_copy(media_subtype);
+        content_type_ = content_type_t(media_type, media_subtype_lower, attributes);
+        auto bound_it = attributes.find(content_type_t::ATTR_BOUNDARY);
+        if (bound_it != attributes.end())
+            content_type_.add_attribute(content_type_t::ATTR_BOUNDARY, bound_it->second.buffer);
+        auto charset_it = attributes.find(content_type_t::ATTR_CHARSET);
+        if (charset_it != attributes.end())
+            content_type_ = content_type_t(media_type, media_subtype_lower, attributes, boost::to_lower_copy(charset_it->second.buffer));
+        auto name_it = attributes.find(ATTRIBUTE_NAME);
+        if (name_it != attributes.end() && name_.buffer.empty())
+            name_ = name_it->second;
     }
-}
-
-#if MAILXX_THROWING_ENABLED
-std::string inline message::format_header(bool add_bcc_header) const
-{
-    return mailxx::unwrap(format_header_result(add_bcc_header));
-}
-#endif
-void inline message::parse_header_line(const std::string& header_line)
-{
-    if (parse_error_)
-        return;
-
-    try
+    else if (detail::iequals_ascii(header_name, CONTENT_TRANSFER_ENCODING_HEADER))
     {
-        std::string header_name, header_value;
-        parse_header_name_value(header_line, header_name, header_value);
+        attributes_t attributes;
+        auto enc_res = parse_content_transfer_encoding(header_value, encoding_, attributes);
+        if (!enc_res)
+        {
+            record_mime_error(enc_res.error());
+            return ok();
+        }
+    }
+    else if (detail::iequals_ascii(header_name, CONTENT_DISPOSITION_HEADER))
+    {
+        attributes_t attributes;
+        auto disp_res = parse_content_disposition(header_value, disposition_, attributes);
+        if (!disp_res)
+        {
+            record_mime_error(disp_res.error());
+            return ok();
+        }
+        auto merge_res = merge_attributes(attributes);
+        if (!merge_res)
+        {
+            record_mime_error(merge_res.error());
+            return ok();
+        }
 
-        if (detail::iequals_ascii(header_name, CONTENT_TYPE_HEADER))
+        auto filename_it = attributes.find(ATTRIBUTE_FILENAME);
+        if (filename_it != attributes.end())
+            name_ = filename_it->second;
+    }
+    else if (detail::iequals_ascii(header_name, CONTENT_ID_HEADER))
+    {
+        auto ids_res = parse_many_ids(header_value);
+        if (!ids_res)
         {
-            media_type_t media_type;
-            std::string media_subtype;
-            attributes_t attributes;
-            parse_content_type(header_value, media_type, media_subtype, attributes);
-            merge_attributes(attributes);
-
-            std::string media_subtype_lower = boost::to_lower_copy(media_subtype);
-            content_type_ = content_type_t(media_type, media_subtype_lower, attributes);
-            auto bound_it = attributes.find(content_type_t::ATTR_BOUNDARY);
-            if (bound_it != attributes.end())
-                content_type_.add_attribute(content_type_t::ATTR_BOUNDARY, bound_it->second.buffer);
-            auto charset_it = attributes.find(content_type_t::ATTR_CHARSET);
-            if (charset_it != attributes.end())
-                content_type_ = content_type_t(media_type, media_subtype_lower, attributes, boost::to_lower_copy(charset_it->second.buffer));
-            auto name_it = attributes.find(ATTRIBUTE_NAME);
-            if (name_it != attributes.end() && name_.buffer.empty())
-                name_ = name_it->second;
+            record_parse_error(std::move(ids_res).error());
+            return ok();
         }
-        else if (detail::iequals_ascii(header_name, CONTENT_TRANSFER_ENCODING_HEADER))
-        {
-            attributes_t attributes;
-            parse_content_transfer_encoding(header_value, encoding_, attributes);
-        }
-        else if (detail::iequals_ascii(header_name, CONTENT_DISPOSITION_HEADER))
-        {
-            attributes_t attributes;
-            parse_content_disposition(header_value, disposition_, attributes);
-            merge_attributes(attributes);
-
-            auto filename_it = attributes.find(ATTRIBUTE_FILENAME);
-            if (filename_it != attributes.end())
-                name_ = filename_it->second;
-        }
-        else if (detail::iequals_ascii(header_name, CONTENT_ID_HEADER))
-        {
-            auto ids = parse_many_ids(header_value);
-            if (!ids.empty())
-                content_id_ = ids[0];
-        }
+        if (!ids_res->empty())
+            content_id_ = ids_res->at(0);
+    }
 
         if (detail::iequals_ascii(header_name, FROM_HEADER))
         {
@@ -1878,13 +1579,13 @@ void inline message::parse_header_line(const std::string& header_line)
             if (!from_res)
             {
                 record_parse_error(std::move(from_res).error());
-                return;
+                return ok();
             }
             from_ = std::move(*from_res);
             if (from_.addresses.empty())
             {
                 record_parse_error(make_error(errc::mime_parse_error, "Empty author header.", ""));
-                return;
+                return ok();
             }
         }
         else if (detail::iequals_ascii(header_name, SENDER_HEADER))
@@ -1897,7 +1598,7 @@ void inline message::parse_header_line(const std::string& header_line)
                 if (!mbx_res)
                 {
                     record_parse_error(std::move(mbx_res).error());
-                    return;
+                    return ok();
                 }
                 if (!mbx_res->addresses.empty())
                     sender_ = mbx_res->addresses[0];
@@ -1909,7 +1610,7 @@ void inline message::parse_header_line(const std::string& header_line)
             if (!mbx_res)
             {
                 record_parse_error(std::move(mbx_res).error());
-                return;
+                return ok();
             }
             if (!mbx_res->addresses.empty())
                 reply_address_ = mbx_res->addresses[0];
@@ -1920,7 +1621,7 @@ void inline message::parse_header_line(const std::string& header_line)
             if (!rcpt_res)
             {
                 record_parse_error(std::move(rcpt_res).error());
-                return;
+                return ok();
             }
             recipients_ = std::move(*rcpt_res);
         }
@@ -1930,7 +1631,7 @@ void inline message::parse_header_line(const std::string& header_line)
             if (!cc_res)
             {
                 record_parse_error(std::move(cc_res).error());
-                return;
+                return ok();
             }
             cc_recipients_ = std::move(*cc_res);
         }
@@ -1940,7 +1641,7 @@ void inline message::parse_header_line(const std::string& header_line)
             if (!mbx_res)
             {
                 record_parse_error(std::move(mbx_res).error());
-                return;
+                return ok();
             }
             if (!mbx_res->addresses.empty())
                 disposition_notification_ = mbx_res->addresses[0];
@@ -1951,15 +1652,36 @@ void inline message::parse_header_line(const std::string& header_line)
                 message_id_.clear();
             else
             {
-                auto ids = parse_many_ids(header_value);
-                if (!ids.empty())
-                    message_id_ = ids[0];
+                auto ids_res = parse_many_ids(header_value);
+                if (!ids_res)
+                {
+                    record_parse_error(std::move(ids_res).error());
+                    return ok();
+                }
+                if (!ids_res->empty())
+                    message_id_ = ids_res->at(0);
             }
         }
         else if (detail::iequals_ascii(header_name, IN_REPLY_TO_HEADER))
-            in_reply_to_ = parse_many_ids(header_value);
+        {
+            auto ids_res = parse_many_ids(header_value);
+            if (!ids_res)
+            {
+                record_parse_error(std::move(ids_res).error());
+                return ok();
+            }
+            in_reply_to_ = std::move(*ids_res);
+        }
         else if (detail::iequals_ascii(header_name, REFERENCES_HEADER))
-            references_ = parse_many_ids(header_value);
+        {
+            auto ids_res = parse_many_ids(header_value);
+            if (!ids_res)
+            {
+                record_parse_error(std::move(ids_res).error());
+                return ok();
+            }
+            references_ = std::move(*ids_res);
+        }
         else if (detail::iequals_ascii(header_name, SUBJECT_HEADER))
         {
             if (header_value.empty() && !strict_mode_)
@@ -1970,7 +1692,7 @@ void inline message::parse_header_line(const std::string& header_line)
                 if (!subject_res)
                 {
                     record_parse_error(std::move(subject_res).error());
-                    return;
+                    return ok();
                 }
                 std::tie(subject_.buffer, subject_.charset, subject_.codec_type) = std::move(*subject_res);
             }
@@ -1988,7 +1710,7 @@ void inline message::parse_header_line(const std::string& header_line)
                 if (!date_res)
                 {
                     record_parse_error(std::move(date_res).error());
-                    return;
+                    return ok();
                 }
                 date_time_ = std::move(*date_res);
             }
@@ -2000,35 +1722,16 @@ void inline message::parse_header_line(const std::string& header_line)
             else
                 version_ = detail::trim_copy(header_value);
         }
-        else
+    else
+    {
+        if (!detail::iequals_ascii(header_name, CONTENT_TYPE_HEADER) && !detail::iequals_ascii(header_name, CONTENT_TRANSFER_ENCODING_HEADER) &&
+            !detail::iequals_ascii(header_name, CONTENT_DISPOSITION_HEADER))
         {
-            if (!detail::iequals_ascii(header_name, CONTENT_TYPE_HEADER) && !detail::iequals_ascii(header_name, CONTENT_TRANSFER_ENCODING_HEADER) &&
-                !detail::iequals_ascii(header_name, CONTENT_DISPOSITION_HEADER))
-            {
-                headers_.insert(std::make_pair(header_name, header_value));
-            }
+            headers_.insert(std::make_pair(header_name, header_value));
         }
     }
-    catch (const mime_error& exc)
-    {
-        std::string detail = exc.what();
-        std::string extra = exc.details();
-        if (!extra.empty())
-        {
-            if (!detail.empty())
-                detail += ": ";
-            detail += extra;
-        }
-        record_parse_error(make_error(errc::mime_parse_error, "mime parse error", std::move(detail)));
-    }
-    catch (const std::exception& exc)
-    {
-        record_parse_error(make_error(errc::mime_parse_error, "mime parse error", exc.what()));
-    }
-    catch (...)
-    {
-        record_parse_error(make_error(errc::mime_parse_error, "mime parse error", "unknown error"));
-    }
+
+    return ok();
 }
 
 
@@ -2228,34 +1931,93 @@ result<std::string> inline message::format_subject() const
     return ok(std::move(subject));
 }
 
-
-std::string inline message::format_date() const
+result<std::string> inline message::format_date() const
 {
     // RFC 5322 format: "Fri, 21 Nov 1997 09:55:06 -0600"
-    auto local_time = date_time_.get_local_time();
-    auto sys_time = date_time_.get_sys_time();
-    auto info = date_time_.get_time_zone()->get_info(sys_time);
-    auto offset = info.offset;
-    
-    // Calculate offset hours and minutes
-    auto offset_hours = std::chrono::duration_cast<std::chrono::hours>(offset).count();
-    auto offset_minutes = std::chrono::abs(std::chrono::duration_cast<std::chrono::minutes>(offset) % std::chrono::hours(1)).count();
-    
-    // Format the main date/time part
-    std::string result = std::format("{:%a, %d %b %Y %H:%M:%S}", local_time);
-    
-    // Append timezone offset
-    std::format_to(std::back_inserter(result), " {:+03d}{:02d}", static_cast<int>(offset_hours), static_cast<int>(offset_minutes));
-    
-    return result;
+    static constexpr std::array<std::string_view, 7> WEEKDAYS = {
+        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+    };
+    static constexpr std::array<std::string_view, 12> MONTHS = {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    };
+
+    const auto local_time = date_time_.get_local_time();
+    const auto sys_time = date_time_.get_sys_time();
+    const auto info = date_time_.get_time_zone()->get_info(sys_time);
+    const auto offset = info.offset;
+
+    const auto day_point = std::chrono::floor<std::chrono::days>(local_time);
+    const std::chrono::year_month_day ymd{day_point};
+    const std::chrono::weekday wd{day_point};
+    const std::chrono::hh_mm_ss hms{local_time - day_point};
+
+    std::string result;
+    result.reserve(32);
+
+    const unsigned wd_index = wd.c_encoding();
+    if (wd_index < WEEKDAYS.size())
+        result.append(WEEKDAYS[wd_index]);
+    else
+        result.append("Sun");
+    result.append(", ");
+
+    auto append_two = [&result](int value)
+    {
+        value = value < 0 ? -value : value;
+        result.push_back(static_cast<char>('0' + (value / 10) % 10));
+        result.push_back(static_cast<char>('0' + (value % 10)));
+    };
+
+    const unsigned day = static_cast<unsigned>(ymd.day());
+    append_two(static_cast<int>(day));
+    result.push_back(' ');
+
+    const unsigned month_index = static_cast<unsigned>(ymd.month()) - 1;
+    if (month_index < MONTHS.size())
+        result.append(MONTHS[month_index]);
+    else
+        result.append("Jan");
+    result.push_back(' ');
+
+    const int year = static_cast<int>(ymd.year());
+    {
+        char buf[16];
+        auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), year);
+        if (ec != std::errc{})
+            return fail<std::string>(errc::mime_parse_error, "mime format error", "Year conversion failure.");
+        result.append(buf, ptr);
+    }
+
+    result.push_back(' ');
+    append_two(static_cast<int>(hms.hours().count()));
+    result.push_back(':');
+    append_two(static_cast<int>(hms.minutes().count()));
+    result.push_back(':');
+    append_two(static_cast<int>(hms.seconds().count()));
+
+    const auto total_minutes = std::chrono::duration_cast<std::chrono::minutes>(offset).count();
+    const int sign = total_minutes < 0 ? -1 : 1;
+    int abs_minutes = static_cast<int>(total_minutes * sign);
+    const int offset_hours = abs_minutes / 60;
+    const int offset_minutes = abs_minutes % 60;
+
+    result.push_back(' ');
+    result.push_back(sign < 0 ? '-' : '+');
+    append_two(offset_hours);
+    append_two(offset_minutes);
+
+    return ok(std::move(result));
 }
 
-std::string inline message::format_date_header() const
+result<std::string> inline message::format_date_header() const
 {
     std::string header = std::string(DATE_HEADER) + HEADER_SEPARATOR_STR;
-    header += format_date();
+    std::string date;
+    MAILXX_TRY_ASSIGN(date, format_date());
+    header += date;
     header += codec::END_OF_LINE;
-    return header;
+    return ok(std::move(header));
 }
 
 

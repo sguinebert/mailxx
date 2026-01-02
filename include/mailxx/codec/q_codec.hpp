@@ -26,7 +26,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/codec/base64.hpp>
 #include <mailxx/codec/quoted_printable.hpp>
 #include <mailxx/detail/result.hpp>
-#include <mailxx/export.hpp>
+#include <mailxx/config.hpp>
 
 
 namespace mailxx
@@ -48,7 +48,6 @@ public:
     @param line1_policy First line policy to set.
     @param lines_policy Other lines policy than the first one to set.
     @param codec_method Method for encoding/decoding.
-    @throw codec_error  Bad encoding method.
     **/
     q_codec(std::string::size_type line1_policy, std::string::size_type lines_policy)
         : codec(line1_policy, lines_policy)
@@ -115,11 +114,6 @@ public:
 
     @param text        String to decode.
     @return            Decoded string, its charset and its codec method.
-    @throw codec_error Missing Q codec separator for charset.
-    @throw codec_error Missing Q codec separator for codec type.
-    @throw codec_error Missing last Q codec separator.
-    @throw codec_error Bad encoding method.
-    @throw *           `decode_qp(const string&)`.
     **/
     result<std::tuple<std::string, std::string, codec_t>> decode(const std::string& text) const
     {
@@ -177,7 +171,6 @@ public:
 
     @param text        String to decode.
     @return            Decoded string, its charset and its codec method.
-    @throw codec_error Bad Q codec format.
     @todo              Returning value to hold `string_t` instead of two `std::string`.
     **/
     result<std::tuple<std::string, std::string, codec_t>> check_decode(const std::string& text) const
@@ -250,7 +243,6 @@ private:
 
     @param text String to decode.
     @return     Decoded string.
-    @throw *    `quoted_printable::decode(const vector<string>&)`
     **/
     result<std::string> decode_qp(const std::string& text) const
     {

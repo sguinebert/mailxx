@@ -19,7 +19,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <boost/algorithm/string/trim.hpp>
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/detail/result.hpp>
-#include <mailxx/export.hpp>
+#include <mailxx/config.hpp>
 
 
 namespace mailxx
@@ -64,8 +64,6 @@ public:
 
     @param text        String to encode.
     @return            Vector of quoted printable strings.
-    @throw codec_error Bad character.
-    @throw codec_error Bad CRLF sequence.
     **/
     result<std::vector<std::string>> encode(const std::string& text) const
     {
@@ -251,9 +249,6 @@ public:
 
     @param text        Vector of quoted printable encoded strings.
     @return            Decoded string.
-    @throw codec_error Bad line policy.
-    @throw codec_error Bad character.
-    @throw codec_error Bad hexadecimal digit.
     **/
     result<std::string> decode(const std::vector<std::string>& text) const
     {

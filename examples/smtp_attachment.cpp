@@ -22,6 +22,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <boost/asio/detached.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include "example_util.hpp"
 #include <mailxx/mime/message.hpp>
 #include <mailxx/net/tls_mode.hpp>
 #include <mailxx/smtp/client.hpp>
@@ -32,10 +33,6 @@ using mailxx::string_t;
 using mailxx::mail_address;
 using mailxx::smtp::auth_method;
 using mailxx::smtp::client;
-using mailxx::smtp::error;
-using mailxx::net::dialog_error;
-using std::cout;
-using std::endl;
 using std::ifstream;
 using std::string;
 using std::tuple;
@@ -51,44 +48,54 @@ int main()
     boost::asio::co_spawn(io_ctx,
         [&]() -> boost::asio::awaitable<void>
         {
-            try
+            // create mail message
+            message msg;
+            msg.from(mail_address("mailxx library", "mailxx@gmail.com"));// set the correct sender name and address
+            msg.add_recipient(mail_address("mailxx library", "mailxx@gmail.com"));// set the correct recipent name and address
+            msg.subject("smtps message with attachment");
+            msg.content("Here are Aleph0 and Infinity pictures.");
+
+            ifstream ifs1("aleph0.png", std::ios::binary);
+            ifstream ifs2("infinity.png", std::ios::binary);
+            list<tuple<std::istream&, string_t, message::content_type_t>> atts;
+            atts.push_back(make_tuple(std::ref(ifs1), "aleph0.png", message::content_type_t(message::media_type_t::IMAGE, "png")));
+            atts.push_back(make_tuple(std::ref(ifs2), "infinity.png", message::content_type_t(message::media_type_t::IMAGE, "png")));
+            auto attach_res = msg.attach(atts);
+            if (!attach_res)
             {
-                // create mail message
-                message msg;
-                msg.from(mail_address("mailxx library", "mailxx@gmail.com"));// set the correct sender name and address
-                msg.add_recipient(mail_address("mailxx library", "mailxx@gmail.com"));// set the correct recipent name and address
-                msg.subject("smtps message with attachment");
-                msg.content("Here are Aleph0 and Infinity pictures.");
-
-                ifstream ifs1("aleph0.png", std::ios::binary);
-                ifstream ifs2("infinity.png", std::ios::binary);
-                list<tuple<std::istream&, string_t, message::content_type_t>> atts;
-                atts.push_back(make_tuple(std::ref(ifs1), "aleph0.png", message::content_type_t(message::media_type_t::IMAGE, "png")));
-                atts.push_back(make_tuple(std::ref(ifs2), "infinity.png", message::content_type_t(message::media_type_t::IMAGE, "png")));
-                msg.attach(atts);
-
-                // use a server to login over tls connectivity
-                mailxx::smtp::options options;
-                options.tls.use_default_verify_paths = true;
-                options.tls.verify = mailxx::net::verify_mode::peer;
-                options.tls.verify_host = true;
-                options.auto_starttls = true;
-
-                client conn(io_ctx.get_executor(), options);
-                co_await conn.connect("smtp.mailserver.com", "587",
-                    mailxx::net::tls_mode::starttls, &ssl_ctx, "smtp.mailserver.com");
-                // modify username/password to use real credentials
-                co_await conn.authenticate("mailxx@mailserver.com", "mailxxpass", auth_method::login);
-                co_await conn.send(msg);
-                co_await conn.quit();
+                print_error(attach_res.error());
+                co_return;
             }
-            catch (error& exc)
+
+            // use a server to login over tls connectivity
+            mailxx::smtp::options options;
+            options.tls.use_default_verify_paths = true;
+            options.tls.verify = mailxx::net::verify_mode::peer;
+            options.tls.verify_host = true;
+            options.auto_starttls = true;
+
+            client conn(io_ctx.get_executor(), options);
+            if (auto connect_res = co_await conn.connect("smtp.mailserver.com", "587",
+                mailxx::net::tls_mode::starttls, &ssl_ctx, "smtp.mailserver.com"); !connect_res)
             {
-                cout << exc.what() << endl;
+                print_error(connect_res.error());
+                co_return;
             }
-            catch (dialog_error& exc)
+            // modify username/password to use real credentials
+            if (auto auth_res = co_await conn.authenticate("mailxx@mailserver.com", "mailxxpass", auth_method::login); !auth_res)
             {
-                cout << exc.what() << endl;
+                print_error(auth_res.error());
+                co_return;
+            }
+            if (auto send_res = co_await conn.send(msg); !send_res)
+            {
+                print_error(send_res.error());
+                co_return;
+            }
+            if (auto quit_res = co_await conn.quit(); !quit_res)
+            {
+                print_error(quit_res.error());
+                co_return;
             }
             co_return;
         },

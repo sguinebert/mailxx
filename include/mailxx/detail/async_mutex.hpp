@@ -18,20 +18,13 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <deque>
 #include <memory>
 #include <mutex>
-#include <stdexcept>
 #include <utility>
 
 #include <mailxx/detail/asio_decl.hpp>
+#include <mailxx/detail/result.hpp>
 
 namespace mailxx::detail
 {
-
-/// Exception thrown when async_mutex lock is cancelled
-class lock_cancelled : public std::runtime_error
-{
-public:
-    lock_cancelled() : std::runtime_error("async_mutex lock cancelled") {}
-};
 
 class async_mutex
 {
@@ -92,16 +85,15 @@ public:
     async_mutex(const async_mutex&) = delete;
     async_mutex& operator=(const async_mutex&) = delete;
 
-    /// Lock the mutex asynchronously
-    /// @throws lock_cancelled if the operation is aborted
-    /// @throws asio::system_error on other errors
-    mailxx::asio::awaitable<scoped_lock> lock()
+    /// Lock the mutex asynchronously.
+    /// @return Success with scoped_lock or error on cancellation/failure.
+    mailxx::asio::awaitable<mailxx::result<scoped_lock>> lock()
     {
         // Use compare_exchange for thread-safe check-and-set
         bool expected = false;
         if (locked_.compare_exchange_strong(expected, true, std::memory_order_acquire))
         {
-            co_return scoped_lock(*this);
+            co_return mailxx::ok(scoped_lock(*this));
         }
 
         auto waiter = std::make_shared<waiter_t>(executor_);
@@ -122,13 +114,17 @@ public:
                 waiters_.erase(it);
 
             if (ec)
-                throw mailxx::asio::system_error(ec);
-            throw lock_cancelled();
+                co_return mailxx::fail<scoped_lock>(
+                    errc::net_io_failed,
+                    "async_mutex lock wait failed",
+                    ec.message(),
+                    ec);
+            co_return mailxx::fail<scoped_lock>(errc::net_cancelled, "async_mutex lock cancelled");
         }
 
         (void)ec;
         locked_.store(true, std::memory_order_acquire);
-        co_return scoped_lock(*this);
+        co_return mailxx::ok(scoped_lock(*this));
     }
 
 private:

@@ -34,6 +34,5 @@ export import mailxx.mime;
 // Export SMTP headers
 export {
     #include <mailxx/smtp/types.hpp>
-    #include <mailxx/smtp/error.hpp>
     #include <mailxx/smtp/client.hpp>
 }

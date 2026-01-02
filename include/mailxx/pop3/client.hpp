@@ -26,7 +26,6 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <utility>
 #include <istream>
 #include <sstream>
-#include <stdexcept>
 #include <tuple>
 #include <optional>
 #include <system_error>
@@ -35,7 +34,6 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/net/upgradable_stream.hpp>
 #include <mailxx/net/dialog.hpp>
 #include <mailxx/net/tls_mode.hpp>
-#include <mailxx/net/tls_error.hpp>
 #include <mailxx/mime/message.hpp>
 #include <mailxx/detail/append.hpp>
 #include <mailxx/detail/asio_error.hpp>
@@ -46,7 +44,6 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <mailxx/detail/sanitize.hpp>
 #include <mailxx/detail/reconnection.hpp>
 #include <mailxx/oauth2/token_source.hpp>
-#include <mailxx/pop3/error.hpp>
 #include <mailxx/pop3/error_mapping.hpp>
 #include <mailxx/pop3/types.hpp>
 
@@ -208,45 +205,52 @@ public:
 
     awaitable<result_void> connect(const std::string& host, uint16_t port)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await connect_impl(host, std::to_string(port), mailxx::net::tls_mode::none, nullptr, {});
     }
 
     awaitable<result_void> connect(const std::string& host, uint16_t port, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await connect_impl(host, std::to_string(port), mode, tls_ctx, std::move(sni));
     }
 
     awaitable<result_void> connect(const std::string& host, const std::string& service, mailxx::net::tls_mode mode,
         ssl::context* tls_ctx = nullptr, std::string sni = {})
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await connect_impl(host, service, mode, tls_ctx, std::move(sni));
     }
 
     awaitable<result<std::string>> read_greeting()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await read_greeting_impl();
     }
 
     awaitable<result<capabilities_t>> capa()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await capa_impl();
     }
 
     awaitable<result_void> start_tls(ssl::context& context, std::string sni = {})
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await start_tls_impl(context, std::move(sni));
     }
 
     awaitable<result_void> login(const std::string& username, const std::string& password)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await login_impl(username, password);
     }
 
@@ -255,7 +259,8 @@ public:
      */
     awaitable<result_void> auth_plain(const std::string& username, const std::string& password)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await auth_plain_impl(username, password);
     }
 
@@ -268,7 +273,8 @@ public:
      */
     awaitable<result_void> auth_xoauth2(const std::string& username, const std::string& access_token)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await auth_xoauth2_impl(username, access_token);
     }
 
@@ -277,7 +283,8 @@ public:
      */
     awaitable<result_void> apop(const std::string& username, const std::string& password)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await apop_impl(username, password);
     }
 
@@ -286,7 +293,8 @@ public:
      */
     awaitable<result_void> authenticate(const std::string& username, const std::string& credential, auth_method_t method)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await authenticate_impl(username, credential, method);
     }
 
@@ -296,13 +304,15 @@ public:
      */
     awaitable<result_void> authenticate_oauth2(const std::string& username, const std::string& access_token)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await auth_xoauth2_impl(username, access_token);
     }
 
     awaitable<result_void> authenticate_oauth2(const std::string& username, mailxx::oauth2::token_source& source)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         auto auth = [&](const std::string& token) -> awaitable<result_void>
         {
             co_return co_await auth_xoauth2_impl(username, token);
@@ -316,31 +326,36 @@ public:
 
     awaitable<result<mailbox_stat_t>> stat()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await stat_impl();
     }
 
     awaitable<result<message_list_t>> list()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await list_impl();
     }
 
     awaitable<result<message_list_t>> list(unsigned message_no)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await list_impl(message_no);
     }
 
     awaitable<result<uidl_list_t>> uidl(unsigned message_no = 0)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await uidl_impl(message_no);
     }
 
     awaitable<result<std::string>> retr(unsigned long message_no)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await retr_impl(message_no);
     }
 
@@ -355,43 +370,50 @@ public:
         unsigned long expected_size,
         progress_callback_t progress)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await retr_with_progress_impl(message_no, expected_size, std::move(progress));
     }
 
     awaitable<result<std::string>> top(unsigned message_no, unsigned lines)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await top_impl(message_no, lines);
     }
 
     awaitable<result<mailxx::message>> retr_message(unsigned message_no)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await retr_message_impl(message_no);
     }
 
     awaitable<result_void> dele(unsigned long message_no)
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await dele_impl(message_no);
     }
 
     awaitable<result_void> rset()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await rset_impl();
     }
 
     awaitable<result_void> noop()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await noop_impl();
     }
 
     awaitable<result_void> quit()
     {
-        [[maybe_unused]] auto guard = co_await mutex_.lock();
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         co_return co_await quit_impl();
     }
 
@@ -471,17 +493,7 @@ public:
                 attempt > reconnection_policy_.max_attempts)
             {
                 if (reconnection_policy_.on_reconnect_failed)
-                {
-                    std::string msg = err.message.empty() ? std::string(mailxx::to_string(err.code)) : err.message;
-                    if (!err.detail.empty())
-                    {
-                        if (!msg.empty())
-                            msg += " - ";
-                        msg += err.detail;
-                    }
-                    std::runtime_error ex(msg);
-                    reconnection_policy_.on_reconnect_failed(ex);
-                }
+                    reconnection_policy_.on_reconnect_failed(err);
                 co_return last_error;
             }
             
@@ -514,7 +526,7 @@ public:
     }
 
 private:
-    /// Check if an exception indicates a connection error
+    /// Check if an error indicates a connection error
     [[nodiscard]] static bool is_connection_error(const error_info& err) noexcept
     {
         switch (err.code)
@@ -1189,7 +1201,7 @@ private:
         std::string msg_str;
         MAILXX_CO_TRY_ASSIGN(msg_str, co_await retr_impl(message_no));
         mailxx::message msg;
-        MAILXX_CO_TRY_ASSIGN(msg, mailxx::message::parse_result(msg_str));
+        MAILXX_CO_TRY_VOID(msg.parse(msg_str));
         co_return ok(std::move(msg));
     }
 

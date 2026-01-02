@@ -72,16 +72,13 @@ set(THREADS_PREFER_PTHREAD_FLAG)
 find_package(Threads)
 
 set(project_headers
-    ${PROJECT_SOURCE_DIR}/include/mailxx/export.hpp
+    ${PROJECT_SOURCE_DIR}/include/mailxx/config.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/mailxx.hpp
-    ${PROJECT_SOURCE_DIR}/include/mailxx/imap.hpp
-    ${PROJECT_SOURCE_DIR}/include/mailxx/import.hpp
-    ${PROJECT_SOURCE_DIR}/include/mailxx/message.hpp
-    ${PROJECT_SOURCE_DIR}/include/mailxx/pop3.hpp
-    ${PROJECT_SOURCE_DIR}/include/mailxx/smtp.hpp
+    ${PROJECT_SOURCE_DIR}/include/mailxx/pool.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/detail/append.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/detail/async_mutex.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/detail/ascii.hpp
+    ${PROJECT_SOURCE_DIR}/include/mailxx/detail/regex.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/codec/base64.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/codec/binary.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/codec/bit7.hpp
@@ -96,13 +93,10 @@ set(project_headers
     ${PROJECT_SOURCE_DIR}/include/mailxx/net/dialog.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/net/upgradable_stream.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/imap/client.hpp
-    ${PROJECT_SOURCE_DIR}/include/mailxx/imap/error.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/imap/types.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/pop3/client.hpp
-    ${PROJECT_SOURCE_DIR}/include/mailxx/pop3/error.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/pop3/types.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/smtp/client.hpp
-    ${PROJECT_SOURCE_DIR}/include/mailxx/smtp/error.hpp
     ${PROJECT_SOURCE_DIR}/include/mailxx/smtp/types.hpp
 )
 

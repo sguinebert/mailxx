@@ -21,7 +21,7 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <boost/algorithm/string.hpp>
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/detail/result.hpp>
-#include <mailxx/export.hpp>
+#include <mailxx/config.hpp>
 
 
 namespace mailxx

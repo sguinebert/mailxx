@@ -20,6 +20,9 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <map>
 #include <vector>
 #include <random>
+#include <charconv>
+#include <system_error>
+#include <mailxx/detail/regex.hpp>
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include <mailxx/codec/base64.hpp>
@@ -51,13 +54,6 @@ inline std::string codec_error_message(const error_info& err)
     return msg;
 }
 
-template<typename T>
-inline T expect_or_throw(result<T>&& res)
-{
-    if (!res)
-        throw codec_error(codec_error_message(res.error()));
-    return std::move(*res);
-}
 } // namespace detail
 
 inline const std::string mime::CONTENT_ID_HEADER{"Content-ID"};
@@ -190,8 +186,8 @@ inline const std::string mime::ATTRIBUTE_FILENAME{"filename"};
 inline const std::string mime::BOUNDARY_DELIMITER(2, '-');
 inline const std::string mime::QTEXT{"\t !#$%&'()*+,-.@/:;<=>?[]^_`{|}~"};
 // exluded double quote and backslash characters from the header name
-inline const boost::regex mime::HEADER_NAME_REGEX{R"(([a-zA-Z0-9\!#\$%&'\(\)\*\+\-\./;\<=\>\?@\[\\\]\^\_`\{\|\}\~]+))"};
-inline const boost::regex mime::HEADER_VALUE_REGEX{R"(([a-zA-Z0-9\ \t\!\"#\$%&'\(\)\*\+\,\-\./:;\<=\>\?@\[\\\]\^\_`\{\|\}\~]+))"};
+inline const detail::regex mime::HEADER_NAME_REGEX{R"(([a-zA-Z0-9\!#\$%&'\(\)\*\+\-\./;\<=\>\?@\[\\\]\^\_`\{\|\}\~]+))"};
+inline const detail::regex mime::HEADER_VALUE_REGEX{R"(([a-zA-Z0-9\ \t\!\"#\$%&'\(\)\*\+\,\-\./:;\<=\>\?@\[\\\]\^\_`\{\|\}\~]+))"};
 inline const std::string mime::CONTENT_ATTR_ALPHABET{"!#$%&'*+-.^_`|~"};
 inline const std::string mime::CONTENT_HEADER_VALUE_ALPHABET{"!#$%&*+-./^_`|~"};
 
@@ -204,13 +200,16 @@ inline mime::mime() : version_("1.0"), line_policy_(codec::line_len_policy_t::MA
 }
 
 
-inline void mime::format(std::string& mime_str, bool dot_escape) const
+inline result_void mime::format(std::string& mime_str, bool dot_escape) const
 {
     if (!content_type_.boundary().empty() && content_type_.media_type() != media_type_t::MULTIPART)
-        throw mime_error("Formatting failure, non multipart message with boundary.", "");
+        return fail_void(errc::mime_parse_error, "Formatting failure, non multipart message with boundary.", "");
 
-    mime_str += format_header() + codec::END_OF_LINE;
-    std::string content = format_content(dot_escape);
+    std::string header;
+    MAILXX_TRY_ASSIGN(header, format_header());
+    mime_str += header + codec::END_OF_LINE;
+    std::string content;
+    MAILXX_TRY_ASSIGN(content, format_content(dot_escape));
     mime_str += content;
 
     if (!parts_.empty())
@@ -223,24 +222,26 @@ inline void mime::format(std::string& mime_str, bool dot_escape) const
         for (auto& p : parts_)
         {
             std::string p_str;
-            p.format(p_str, dot_escape);
+            MAILXX_TRY(p.format(p_str, dot_escape));
             mime_str += BOUNDARY_DELIMITER + content_type_.boundary() + codec::END_OF_LINE + p_str + codec::END_OF_LINE;
         }
         mime_str += BOUNDARY_DELIMITER + content_type_.boundary() + BOUNDARY_DELIMITER + codec::END_OF_LINE;
     }
+
+    return ok();
 }
 
 
 #if defined(__cpp_char8_t)
-inline void mime::format(std::u8string& mime_str, bool dot_escape) const
+inline result_void mime::format(std::u8string& mime_str, bool dot_escape) const
 {
     std::string ms = reinterpret_cast<const char*>(mime_str.c_str());
-    format(ms, dot_escape);
+    return format(ms, dot_escape);
 }
 #endif
 
 
-inline void mime::parse(const std::string& mime_string, bool dot_escape)
+inline result_void mime::parse(const std::string& mime_string, bool dot_escape)
 {
     std::string::size_type line_begin = 0;
     std::string::size_type line_end = mime_string.find(codec::END_OF_LINE, line_begin);
@@ -248,7 +249,7 @@ inline void mime::parse(const std::string& mime_string, bool dot_escape)
     while (line_end != std::string::npos)
     {
         line = mime_string.substr(line_begin, line_end - line_begin);
-        parse_by_line(line, dot_escape);
+        MAILXX_TRY(parse_by_line(line, dot_escape));
         if (line_end != std::string::npos)
         {
             line_end += codec::END_OF_LINE.length();
@@ -258,29 +259,30 @@ inline void mime::parse(const std::string& mime_string, bool dot_escape)
     }
     line = mime_string.substr(line_begin);
     if (!line.empty())
-        parse_by_line(line, dot_escape);
-    parse_by_line(codec::END_OF_LINE, dot_escape);
+        MAILXX_TRY(parse_by_line(line, dot_escape));
+    MAILXX_TRY(parse_by_line(codec::END_OF_LINE, dot_escape));
+    return ok();
 }
 
 
 #if defined(__cpp_char8_t)
-inline void mime::parse(const std::u8string& mime_string, bool dot_escape)
+inline result_void mime::parse(const std::u8string& mime_string, bool dot_escape)
 {
-    parse(reinterpret_cast<const char*>(mime_string.c_str()), dot_escape);
+    return parse(reinterpret_cast<const char*>(mime_string.c_str()), dot_escape);
 }
 #endif
 
 
-inline mime& mime::parse_by_line(const std::string& line, bool dot_escape)
+inline result_void mime::parse_by_line(const std::string& line, bool dot_escape)
 {
     if (line.length() > std::string::size_type(line_policy_))
-        throw mime_error("Line policy overflow in a header.", "Line is `" + line + "`.");
+        return fail_void(errc::mime_parse_error, "Line policy overflow in a header.", "Line is `" + line + "`.");
 
     // mark end of header and parse it
     if (parsing_header_ && line.empty())
     {
         parsing_header_ = false;
-        parse_header();
+        MAILXX_TRY(parse_header());
     }
     else
     {
@@ -289,11 +291,11 @@ inline mime& mime::parse_by_line(const std::string& line, bool dot_escape)
         else
         {
             // end of message reached, decode the body
-            if (line == codec::END_OF_LINE)
-            {
-                parse_content();
-                mime_status_ = mime_parsing_status_t::END;
-            }
+                if (line == codec::END_OF_LINE)
+                {
+                    MAILXX_TRY(parse_content());
+                    mime_status_ = mime_parsing_status_t::END;
+                }
             // parsing the body
             else
             {
@@ -303,7 +305,7 @@ inline mime& mime::parse_by_line(const std::string& line, bool dot_escape)
                     mime_status_ = mime_parsing_status_t::BEGIN;
                     // begin of another mime part means that the current part (if exists) is ended and parsed; another part is created
                     if (!parts_.empty())
-                        parts_.back().parse_by_line(codec::END_OF_LINE);
+                        MAILXX_TRY(parts_.back().parse_by_line(codec::END_OF_LINE));
                     mime m;
                     m.line_policy(line_policy_);
                     m.strict_codec_mode(strict_codec_mode_);
@@ -313,14 +315,14 @@ inline mime& mime::parse_by_line(const std::string& line, bool dot_escape)
                 else if (line == BOUNDARY_DELIMITER + content_type_.boundary() + BOUNDARY_DELIMITER && !content_type_.boundary().empty())
                 {
                     mime_status_ = mime_parsing_status_t::END;
-                    parts_.back().parse_by_line(codec::END_OF_LINE);
+                    MAILXX_TRY(parts_.back().parse_by_line(codec::END_OF_LINE));
                 }
                 // mime content being parsed
                 else
                 {
                     // parser entered mime body
                     if (mime_status_ == mime_parsing_status_t::BEGIN)
-                        parts_.back().parse_by_line(line, dot_escape);
+                        MAILXX_TRY(parts_.back().parse_by_line(line, dot_escape));
                     // put the line into `parsed_body_` until the whole body is read for parsing
                     else
                     {
@@ -334,42 +336,44 @@ inline mime& mime::parse_by_line(const std::string& line, bool dot_escape)
         }
     }
 
-    return *this;
+    return ok();
 }
 
 
-inline void mime::content_type(const content_type_t& cont_type)
+inline result_void mime::content_type(const content_type_t& cont_type)
 {
     if (cont_type.media_type() != media_type_t::NONE && cont_type.media_subtype().empty())
-        throw mime_error("Bad content type.", "Media type is none, subtype is `" + cont_type.media_subtype() + "`.");
+        return fail_void(errc::mime_parse_error, "Bad content type.", "Media type is none, subtype is `" + cont_type.media_subtype() + "`.");
     content_type_ = cont_type;
+    return ok();
 }
 
 
-inline void mime::content_type(media_type_t media_type, const std::string& media_subtype, const std::string& charset)
+inline result_void mime::content_type(media_type_t media_type, const std::string& media_subtype, const std::string& charset)
 {
     content_type_t c(media_type, media_subtype, boost::algorithm::to_lower_copy(charset));
-    content_type(c);
+    return content_type(c);
 }
 
 
-inline void mime::content_type(media_type_t media_type, const std::string& media_subtype, const attributes_t& attributes,
+inline result_void mime::content_type(media_type_t media_type, const std::string& media_subtype, const attributes_t& attributes,
 	const std::string& charset)
 {
     content_type_t c(media_type, media_subtype, attributes, boost::algorithm::to_lower_copy(charset));
-    content_type(c);
+    return content_type(c);
 }
 
 
-inline void mime::content_id(std::string id)
+inline result_void mime::content_id(std::string id)
 {
-    const boost::regex r(strict_mode_ ? MESSAGE_ID_REGEX : MESSAGE_ID_REGEX_NS);
-    boost::smatch m;
+    const detail::regex r(strict_mode_ ? MESSAGE_ID_REGEX : MESSAGE_ID_REGEX_NS);
+    detail::smatch m;
 
-    if (boost::regex_match(id, m, r))
-        content_id_ = id;
-    else
-        throw mime_error("Invalid content ID.", "Content ID is `" + id + "`.");
+    if (!detail::regex_match(id, m, r))
+        return fail_void(errc::mime_parse_error, "Invalid content ID.", "Content ID is `" + id + "`.");
+
+    content_id_ = std::move(id);
+    return ok();
 }
 
 
@@ -503,7 +507,7 @@ inline mime::header_codec_t mime::header_codec() const
 }
 
 
-inline std::string mime::format_many_ids(const std::vector<std::string>& ids, const std::string& header_name) const
+inline result<std::string> mime::format_many_ids(const std::vector<std::string>& ids, const std::string& header_name) const
 {
     std::string ids_str;
     for (auto s = ids.begin(); s != ids.end(); s++)
@@ -515,33 +519,38 @@ inline std::string mime::format_many_ids(const std::vector<std::string>& ids, co
 
     std::string::size_type l1p = static_cast<std::string::size_type>(line_policy_) - header_name.length() - HEADER_SEPARATOR_STR.length();
     bit7 b7(l1p, static_cast<std::string::size_type>(line_policy_));
-    std::vector<std::string> ids_enc = detail::expect_or_throw(b7.encode(ids_str));
+    auto ids_enc_res = b7.encode(ids_str);
+    if (!ids_enc_res)
+        return fail<std::string>(errc::mime_parse_error, "mime format error", detail::codec_error_message(ids_enc_res.error()));
+    std::vector<std::string> ids_enc = std::move(*ids_enc_res);
+    if (ids_enc.empty())
+        return fail<std::string>(errc::mime_parse_error, "Header value format error.",
+            "Header is `" + header_name + "`.");
     std::string ids_folded = ids_enc.at(0) + codec::END_OF_LINE;
     ids_folded += fold_header_line(ids_enc);
-    return ids_folded;
+    return ok(std::move(ids_folded));
 }
 
 
-inline std::string mime::format_many_ids(const std::string& id, const std::string& header_name) const
+inline result<std::string> mime::format_many_ids(const std::string& id, const std::string& header_name) const
 {
     return format_many_ids(std::vector<std::string>{id}, header_name);
 }
 
-
-inline std::vector<std::string> mime::parse_many_ids(const std::string& ids) const
+inline result<std::vector<std::string>> mime::parse_many_ids(const std::string& ids) const
 {
     if (!strict_mode_)
-        return std::vector<std::string>{ids};
+        return ok(std::vector<std::string>{ids});
 
     std::vector<std::string> idv;
     auto start = ids.cbegin();
     auto end = ids.cend();
-    boost::match_flag_type flags = boost::match_default | boost::match_not_null;
-    boost::match_results<std::string::const_iterator> tokens;
+    detail::match_flag_type flags = detail::match_default | detail::match_not_null;
+    detail::match_results<std::string::const_iterator> tokens;
     bool all_tokens_parsed = false;
     const std::string ANGLED_MESSAGE_ID_REGEX = codec::LESS_THAN_STR + MESSAGE_ID_REGEX + codec::GREATER_THAN_STR;
-    const boost::regex rgx(ANGLED_MESSAGE_ID_REGEX);
-    while (boost::regex_search(start, end, tokens, rgx, flags))
+    const detail::regex rgx(ANGLED_MESSAGE_ID_REGEX);
+    while (detail::regex_search(start, end, tokens, rgx, flags))
     {
         std::string id = tokens[0];
         boost::algorithm::trim_left_if(id, boost::algorithm::is_any_of(codec::LESS_THAN_STR));
@@ -552,19 +561,27 @@ inline std::vector<std::string> mime::parse_many_ids(const std::string& ids) con
     }
 
     if (!all_tokens_parsed)
-        throw mime_error("Parsing failure of the ID.", "ID is `" + ids + "`.");
+        return fail<std::vector<std::string>>(errc::mime_parse_error, "Parsing failure of the ID.", "ID is `" + ids + "`.");
 
-    return idv;
+    return ok(std::move(idv));
 }
 
 
-inline std::string mime::format_header() const
+inline result<std::string> mime::format_header() const
 {
-    return format_content_type() + format_transfer_encoding() + format_content_disposition() + format_content_id();
+    std::string ct;
+    MAILXX_TRY_ASSIGN(ct, format_content_type());
+    std::string te;
+    MAILXX_TRY_ASSIGN(te, format_transfer_encoding());
+    std::string cd;
+    MAILXX_TRY_ASSIGN(cd, format_content_disposition());
+    std::string cid;
+    MAILXX_TRY_ASSIGN(cid, format_content_id());
+    return ok(ct + te + cd + cid);
 }
 
 
-inline std::string mime::format_content(bool dot_escape) const
+inline result<std::string> mime::format_content(bool dot_escape) const
 {
     std::vector<std::string> content_lines;
     switch (encoding_)
@@ -581,7 +598,10 @@ inline std::string mime::format_content(bool dot_escape) const
         {
             quoted_printable qp(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
             qp.strict_mode(strict_codec_mode_);
-            content_lines = detail::expect_or_throw(qp.encode(content_));
+            auto enc_res = qp.encode(content_);
+            if (!enc_res)
+                return fail<std::string>(errc::mime_parse_error, "mime format error", detail::codec_error_message(enc_res.error()));
+            content_lines = std::move(*enc_res);
             break;
         }
 
@@ -590,7 +610,10 @@ inline std::string mime::format_content(bool dot_escape) const
         {
             bit8 b8(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
             b8.strict_mode(strict_codec_mode_);
-            content_lines = detail::expect_or_throw(b8.encode(content_));
+            auto enc_res = b8.encode(content_);
+            if (!enc_res)
+                return fail<std::string>(errc::mime_parse_error, "mime format error", detail::codec_error_message(enc_res.error()));
+            content_lines = std::move(*enc_res);
             break;
         }
 
@@ -600,7 +623,10 @@ inline std::string mime::format_content(bool dot_escape) const
         {
             bit7 b7(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
             b7.strict_mode(strict_codec_mode_);
-            content_lines = detail::expect_or_throw(b7.encode(content_));
+            auto enc_res = b7.encode(content_);
+            if (!enc_res)
+                return fail<std::string>(errc::mime_parse_error, "mime format error", detail::codec_error_message(enc_res.error()));
+            content_lines = std::move(*enc_res);
             break;
         }
 
@@ -623,11 +649,11 @@ inline std::string mime::format_content(bool dot_escape) const
         else
             content += s + codec::END_OF_LINE;
 
-    return content;
+    return ok(std::move(content));
 }
 
 
-inline std::string mime::format_content_type() const
+inline result<std::string> mime::format_content_type() const
 {
     std::string line;
 
@@ -643,17 +669,17 @@ inline std::string mime::format_content_type() const
         }
         if (!name_.buffer.empty())
         {
-            std::string attrs = split_attributes(ATTRIBUTE_NAME, name_);
+            std::string attrs;
+            MAILXX_TRY_ASSIGN(attrs, split_attributes(ATTRIBUTE_NAME, name_));
             line += ATTRIBUTES_SEPARATOR_STR + codec::END_OF_LINE + attrs;
         }
         line += codec::END_OF_LINE;
     }
 
-    return line;
+    return ok(std::move(line));
 }
 
-
-inline std::string mime::format_transfer_encoding() const
+inline result<std::string> mime::format_transfer_encoding() const
 {
     std::string line;
 
@@ -681,28 +707,33 @@ inline std::string mime::format_transfer_encoding() const
             break;
     }
 
-    return line;
+    return ok(std::move(line));
 }
 
 
-inline std::string mime::format_content_disposition() const
+inline result<std::string> mime::format_content_disposition() const
 {
     std::string disp;
     if (disposition_ == content_disposition_t::NONE)
-        return "";
+        return ok(std::string());
     else if (disposition_ == content_disposition_t::ATTACHMENT)
         disp = CONTENT_DISPOSITION_ATTACHMENT;
     else if (disposition_ == content_disposition_t::INLINE)
         disp = CONTENT_DISPOSITION_INLINE;
 
-    std::string attrs = split_attributes(ATTRIBUTE_FILENAME, name_);
-    return CONTENT_DISPOSITION_HEADER + HEADER_SEPARATOR_STR + disp + ATTRIBUTES_SEPARATOR_STR + codec::END_OF_LINE + attrs + codec::END_OF_LINE;
+    std::string attrs;
+    MAILXX_TRY_ASSIGN(attrs, split_attributes(ATTRIBUTE_FILENAME, name_));
+    return ok(CONTENT_DISPOSITION_HEADER + HEADER_SEPARATOR_STR + disp + ATTRIBUTES_SEPARATOR_STR + codec::END_OF_LINE + attrs +
+        codec::END_OF_LINE);
 }
 
-
-inline std::string mime::format_content_id() const
+inline result<std::string> mime::format_content_id() const
 {
-    return content_id_.empty() ? "" : CONTENT_ID_HEADER + HEADER_SEPARATOR_STR + format_many_ids(content_id_, CONTENT_ID_HEADER);
+    if (content_id_.empty())
+        return ok(std::string());
+    std::string ids;
+    MAILXX_TRY_ASSIGN(ids, format_many_ids(content_id_, CONTENT_ID_HEADER));
+    return ok(CONTENT_ID_HEADER + HEADER_SEPARATOR_STR + std::move(ids));
 }
 
 
@@ -719,7 +750,7 @@ inline std::string mime::fold_header_line(const std::vector<std::string>& header
 /*
 According to the RFC5322 section 2.2.3, unfolding removes any CRLF and the initial WSP character.
 */
-inline void mime::parse_header()
+inline result_void mime::parse_header()
 {
     std::string line;
     for (const auto& hdr : parsed_headers_)
@@ -731,20 +762,25 @@ inline void mime::parse_header()
         {
             if (!line.empty())
             {
-                parse_header_line(line);
+                MAILXX_TRY(parse_header_line(line));
                 line.clear();
             }
             line = hdr;
         }
     }
     if (!line.empty())
-        parse_header_line(line);
+        MAILXX_TRY(parse_header_line(line));
+    return ok();
 }
 
 
-inline void mime::parse_content()
+inline result_void mime::parse_content()
 {
     strip_body();
+    auto codec_fail = [](const error_info& err) -> result_void
+    {
+        return fail_void(errc::mime_parse_error, "mime parse error", detail::codec_error_message(err));
+    };
 
     switch (encoding_)
     {
@@ -752,7 +788,10 @@ inline void mime::parse_content()
         {
             base64 b64(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
             b64.strict_mode(strict_codec_mode_);
-            content_ = detail::expect_or_throw(b64.decode(parsed_body_));
+            auto decoded = b64.decode(parsed_body_);
+            if (!decoded)
+                return codec_fail(decoded.error());
+            content_ = std::move(*decoded);
             break;
         }
 
@@ -760,7 +799,10 @@ inline void mime::parse_content()
         {
             quoted_printable qp(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
             qp.strict_mode(strict_codec_mode_);
-            content_ = detail::expect_or_throw(qp.decode(parsed_body_));
+            auto decoded = qp.decode(parsed_body_);
+            if (!decoded)
+                return codec_fail(decoded.error());
+            content_ = std::move(*decoded);
             break;
         }
 
@@ -768,7 +810,10 @@ inline void mime::parse_content()
         {
             bit8 b8(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
             b8.strict_mode(strict_codec_mode_);
-            content_ = detail::expect_or_throw(b8.decode(parsed_body_));
+            auto decoded = b8.decode(parsed_body_);
+            if (!decoded)
+                return codec_fail(decoded.error());
+            content_ = std::move(*decoded);
             break;
         }
 
@@ -777,7 +822,10 @@ inline void mime::parse_content()
         {
             bit7 b7(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
             b7.strict_mode(strict_codec_mode_);
-            content_ = detail::expect_or_throw(b7.decode(parsed_body_));
+            auto decoded = b7.decode(parsed_body_);
+            if (!decoded)
+                return codec_fail(decoded.error());
+            content_ = std::move(*decoded);
             break;
         }
 
@@ -791,6 +839,8 @@ inline void mime::parse_content()
 
         // Default encoding is seven bit, so no `default` clause.
     }
+
+    return ok();
 }
 
 
@@ -803,18 +853,18 @@ values are set. The following headers are recognized by the parser:
 
 By RFC 2045 section 6.4, if an entity is of type Multipart, the content transfer encoding must be Seven Bit, Eight Bit or Binary.
 */
-inline void mime::parse_header_line(const std::string& header_line)
+inline result_void mime::parse_header_line(const std::string& header_line)
 {
     std::string header_name, header_value;
-    parse_header_name_value(header_line, header_name, header_value);
+    MAILXX_TRY(parse_header_name_value(header_line, header_name, header_value));
 
     if (boost::algorithm::iequals(header_name, CONTENT_TYPE_HEADER))
     {
         media_type_t media_type;
         std::string media_subtype;
         attributes_t attributes;
-        parse_content_type(header_value, media_type, media_subtype, attributes);
-        merge_attributes(attributes);
+        MAILXX_TRY(parse_content_type(header_value, media_type, media_subtype, attributes));
+        MAILXX_TRY(merge_attributes(attributes));
 
         content_type_ = content_type_t(media_type, boost::algorithm::to_lower_copy(media_subtype), attributes);
         attributes_t::iterator bound_it = attributes.find(content_type_t::ATTR_BOUNDARY);
@@ -831,13 +881,13 @@ inline void mime::parse_header_line(const std::string& header_line)
     else if (boost::algorithm::iequals(header_name, CONTENT_TRANSFER_ENCODING_HEADER))
     {
         attributes_t attributes;
-        parse_content_transfer_encoding(header_value, encoding_, attributes);
+        MAILXX_TRY(parse_content_transfer_encoding(header_value, encoding_, attributes));
     }
     else if (boost::algorithm::iequals(header_name, CONTENT_DISPOSITION_HEADER))
     {
         attributes_t attributes;
-        parse_content_disposition(header_value, disposition_, attributes);
-        merge_attributes(attributes);
+        MAILXX_TRY(parse_content_disposition(header_value, disposition_, attributes));
+        MAILXX_TRY(merge_attributes(attributes));
 
         // filename is stored no matter if name is already set by content type
         attributes_t::iterator filename_it = attributes.find(ATTRIBUTE_FILENAME);
@@ -846,18 +896,22 @@ inline void mime::parse_header_line(const std::string& header_line)
     }
     else if (boost::algorithm::iequals(header_name, CONTENT_ID_HEADER))
     {
-        auto ids = parse_many_ids(header_value);
+        std::vector<std::string> ids;
+        MAILXX_TRY_ASSIGN(ids, parse_many_ids(header_value));
         if (!ids.empty())
             content_id_ = ids[0];
     }
+
+    return ok();
 }
 
 
-inline void mime::parse_header_name_value(const std::string& header_line, std::string& header_name, std::string& header_value) const
+inline result_void mime::parse_header_name_value(const std::string& header_line, std::string& header_name,
+    std::string& header_value) const
 {
     std::string::size_type colon_pos = header_line.find(HEADER_SEPARATOR_CHAR);
     if (colon_pos == std::string::npos)
-        throw mime_error("Parsing failure of header line.", "Header line is `" + header_line + "`.");
+        return fail_void(errc::mime_parse_error, "Parsing failure of header line.", "Header line is `" + header_line + "`.");
 
     header_name = header_line.substr(0, colon_pos);
     boost::algorithm::trim(header_name);
@@ -865,28 +919,35 @@ inline void mime::parse_header_name_value(const std::string& header_line, std::s
     boost::algorithm::trim(header_value);
 
     if (header_name.empty())
-        throw mime_error("Parsing failure, header name empty.", "Header line parsed is `" + header_line + "`.");
-    boost::smatch m;
-    if (!boost::regex_match(header_name, m, HEADER_NAME_REGEX))
-        throw mime_error("Format failure of the header name.", "Header line parsed is `" + header_line + "`.");
+        return fail_void(errc::mime_parse_error, "Parsing failure, header name empty.",
+            "Header line parsed is `" + header_line + "`.");
+    detail::smatch m;
+    if (!detail::regex_match(header_name, m, HEADER_NAME_REGEX))
+        return fail_void(errc::mime_parse_error, "Format failure of the header name.",
+            "Header line parsed is `" + header_line + "`.");
 
     if (header_value.empty())
     {
         if (strict_mode_)
-            throw mime_error("Parsing failure, header value empty.", "Header line parsed is `" + header_line + "`.");
+            return fail_void(errc::mime_parse_error, "Parsing failure, header value empty.",
+                "Header line parsed is `" + header_line + "`.");
         else
-            return;
+            return ok();
     }
 
-    if (!codec::is_utf8_string(header_value) && !boost::regex_match(header_value, m, HEADER_VALUE_REGEX))
-        throw mime_error("Format failure of the header value", "Header value is `" + header_value + "`.");
+    if (!codec::is_utf8_string(header_value) && !detail::regex_match(header_value, m, HEADER_VALUE_REGEX))
+        return fail_void(errc::mime_parse_error, "Format failure of the header value",
+            "Header value is `" + header_value + "`.");
+
+    return ok();
 }
 
 
-inline void mime::parse_content_type(const std::string& content_type_hdr, media_type_t& media_type, std::string& media_subtype, attributes_t& attributes) const
+inline result_void mime::parse_content_type(const std::string& content_type_hdr, media_type_t& media_type,
+    std::string& media_subtype, attributes_t& attributes) const
 {
     std::string header_value;
-    parse_header_value_attributes(content_type_hdr, header_value, attributes);
+    MAILXX_TRY(parse_header_value_attributes(content_type_hdr, header_value, attributes));
     std::string media_type_s;
     // flag if media type or subtype is being parsed
     bool is_media_type = true;
@@ -894,12 +955,13 @@ inline void mime::parse_content_type(const std::string& content_type_hdr, media_
     {
         if (ch == CONTENT_SUBTYPE_SEPARATOR)
         {
-            media_type = mime_type_as_enum(media_type_s);
+            MAILXX_TRY_ASSIGN(media_type, mime_type_as_enum(media_type_s));
             is_media_type = false;
         }
         else if (!isalpha(ch) && !isdigit(ch) && CONTENT_ATTR_ALPHABET.find(ch) == std::string::npos)
         {
-            throw mime_error("Parsing content type value failure.", "Header content type header is `" + content_type_hdr + "`.");
+            return fail_void(errc::mime_parse_error, "Parsing content type value failure.",
+                "Header content type header is `" + content_type_hdr + "`.");
         }
         else if (is_media_type)
         {
@@ -910,13 +972,16 @@ inline void mime::parse_content_type(const std::string& content_type_hdr, media_
             media_subtype += ch;
         }
     }
+
+    return ok();
 }
 
 
-inline void mime::parse_content_transfer_encoding(const std::string& transfer_encoding_hdr, content_transfer_encoding_t& encoding, attributes_t& attributes) const
+inline result_void mime::parse_content_transfer_encoding(const std::string& transfer_encoding_hdr,
+    content_transfer_encoding_t& encoding, attributes_t& attributes) const
 {
     std::string header_value;
-    parse_header_value_attributes(transfer_encoding_hdr, header_value, attributes);
+    MAILXX_TRY(parse_header_value_attributes(transfer_encoding_hdr, header_value, attributes));
 
     if (boost::algorithm::iequals(header_value, CONTENT_TRANSFER_ENCODING_BASE64))
         encoding = content_transfer_encoding_t::BASE_64;
@@ -929,16 +994,20 @@ inline void mime::parse_content_transfer_encoding(const std::string& transfer_en
     else if (boost::algorithm::iequals(header_value, CONTENT_TRANSFER_ENCODING_BINARY))
         encoding = content_transfer_encoding_t::BINARY;
     else if (strict_mode_)
-        throw mime_error("Parsing content transfer encoding failure.", "Content transfer header is `" + transfer_encoding_hdr  + "`.");
+        return fail_void(errc::mime_parse_error, "Parsing content transfer encoding failure.",
+            "Content transfer header is `" + transfer_encoding_hdr + "`.");
     else
         encoding = content_transfer_encoding_t::BIT_7;
+
+    return ok();
 }
 
 
-inline void mime::parse_content_disposition(const std::string& content_disp_hdr, content_disposition_t& disposition, attributes_t& attributes) const
+inline result_void mime::parse_content_disposition(const std::string& content_disp_hdr,
+    content_disposition_t& disposition, attributes_t& attributes) const
 {
     std::string header_value;
-    parse_header_value_attributes(content_disp_hdr, header_value, attributes);
+    MAILXX_TRY(parse_header_value_attributes(content_disp_hdr, header_value, attributes));
     if (boost::algorithm::iequals(header_value, CONTENT_DISPOSITION_ATTACHMENT))
         disposition = content_disposition_t::ATTACHMENT;
     else if (boost::algorithm::iequals(header_value, CONTENT_DISPOSITION_INLINE))
@@ -946,10 +1015,13 @@ inline void mime::parse_content_disposition(const std::string& content_disp_hdr,
     else
     {
         if (strict_mode_)
-            throw mime_error("Parsing content disposition failure.", "Content disposition header is `" + content_disp_hdr  + "`.");
+            return fail_void(errc::mime_parse_error, "Parsing content disposition failure.",
+                "Content disposition header is `" + content_disp_hdr + "`.");
         else
             disposition = content_disposition_t::ATTACHMENT;
     }
+
+    return ok();
 }
 
 
@@ -991,7 +1063,8 @@ digraph header_value_attributes
 ```
 For details see [rfc 2045, section 5.1].
 */
-inline void mime::parse_header_value_attributes(const std::string& header, std::string& header_value, attributes_t& attributes) const
+inline result_void mime::parse_header_value_attributes(const std::string& header, std::string& header_value,
+    attributes_t& attributes) const
 {
     enum class state_t {BEGIN, VALUE, ATTR_BEGIN, ATTR_NAME, PRE_EQUAL, ATTR_SEP, POST_EQUAL, QATTR_VALUE_BEGIN, ATTR_VALUE_BEGIN, ATTR_VALUE_END, END};
     state_t state = state_t::BEGIN;
@@ -1011,7 +1084,8 @@ inline void mime::parse_header_value_attributes(const std::string& header, std::
                     header_value += *ch;
                 }
                 else
-                    throw mime_error("Parsing header value error.", "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
+                    return fail_void(errc::mime_parse_error, "Parsing header value error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
                         + ".\nHeader is `" + header + "`.");
                 break;
 
@@ -1021,7 +1095,8 @@ inline void mime::parse_header_value_attributes(const std::string& header, std::
                 else if (*ch == ATTRIBUTES_SEPARATOR_CHAR)
                     state = state_t::ATTR_BEGIN;
                 else
-                    throw mime_error("Parsing header value error.", "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
+                    return fail_void(errc::mime_parse_error, "Parsing header value error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
                         + ".\nHeader is `" + header + "`.");
                 break;
 
@@ -1036,7 +1111,8 @@ inline void mime::parse_header_value_attributes(const std::string& header, std::
                 else if (*ch == NAME_VALUE_SEPARATOR_CHAR)
                     state = state_t::ATTR_SEP;
                 else
-                    throw mime_error("Parsing attribute name error.", "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
+                    return fail_void(errc::mime_parse_error, "Parsing attribute name error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
                         + ".\nHeader is `" + header + "`.");
                 break;
 
@@ -1067,8 +1143,9 @@ inline void mime::parse_header_value_attributes(const std::string& header, std::
                     attribute_value += *ch;
                 }
                 else
-                    throw mime_error("Parsing attribute value error.", "Syntax error at character `" + std::string(1, *ch) + "`, at position " +
-                        std::to_string(char_pos) + ".\nHeader is `" + header + "`.");
+                    return fail_void(errc::mime_parse_error, "Parsing attribute value error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
+                        + ".\nHeader is `" + header + "`.");
                 break;
 
             case state_t::POST_EQUAL:
@@ -1082,8 +1159,9 @@ inline void mime::parse_header_value_attributes(const std::string& header, std::
                     attribute_value += *ch;
                 }
                 else
-                    throw mime_error("Parsing attribute value error.", "Syntax error at character `" + std::string(1, *ch) + "` at position " +
-                        std::to_string(char_pos) + ".\nHeader is `" + header + "`.");
+                    return fail_void(errc::mime_parse_error, "Parsing attribute value error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "` at position " + std::to_string(char_pos)
+                        + ".\nHeader is `" + header + "`.");
                 break;
 
             case state_t::QATTR_VALUE_BEGIN:
@@ -1094,8 +1172,9 @@ inline void mime::parse_header_value_attributes(const std::string& header, std::
                 else if (*ch == codec::QUOTE_CHAR)
                     state = state_t::ATTR_VALUE_END;
                 else
-                    throw mime_error("Parsing attribute value error.", "Syntax error at character `" + std::string(1, *ch) + "` at position " +
-                        std::to_string(char_pos) + ".\nHeader is `" + header + "`.");
+                    return fail_void(errc::mime_parse_error, "Parsing attribute value error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "` at position " + std::to_string(char_pos)
+                        + ".\nHeader is `" + header + "`.");
                 if (ch == header.end() - 1)
                 {
                     attributes[attribute_name] = attribute_value;
@@ -1117,7 +1196,8 @@ inline void mime::parse_header_value_attributes(const std::string& header, std::
                     attribute_value.clear();
                 }
                 else
-                    throw mime_error("Parsing attribute value error.", "Syntax error at character `" + std::string(1, *ch) + "` at position " + std::to_string(char_pos)
+                    return fail_void(errc::mime_parse_error, "Parsing attribute value error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "` at position " + std::to_string(char_pos)
                         + ".\nHeader is `" + header + "`.");
                 if (ch == header.end() - 1)
                 {
@@ -1136,19 +1216,22 @@ inline void mime::parse_header_value_attributes(const std::string& header, std::
                 else if (*ch == ATTRIBUTES_SEPARATOR_CHAR)
                     state = state_t::ATTR_BEGIN;
                 else
-                    throw mime_error("Parsing attribute value error.", "Syntax error at character `" + std::string(1, *ch) + "` at position " + std::to_string(char_pos)
+                    return fail_void(errc::mime_parse_error, "Parsing attribute value error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "` at position " + std::to_string(char_pos)
                         + ".\nHeader is `" + header + "`.");
                 break;
             }
 
             case state_t::END:
-                return;
+                return ok();
         }
     }
+
+    return ok();
 }
 
 
-inline std::string mime::split_attributes(const std::string& attr_name, const string_t& attr_value) const
+inline result<std::string> mime::split_attributes(const std::string& attr_name, const string_t& attr_value) const
 {
     // For the continuation like `filename*0=UTF-8'en-us'C%3A\\Program%20Files\\; ` there are five characters for the charset and two single quotes, because the
     // language is not supported. There are in addition the equal. In total, this is nine characters.
@@ -1166,12 +1249,18 @@ inline std::string mime::split_attributes(const std::string& attr_name, const st
     if (attr_value.codec_type == codec::codec_t::ASCII)
     {
         bit7 b7(line1_policy, line_policy);
-        attr_parts = detail::expect_or_throw(b7.encode(attr_value.buffer));
+        auto parts_res = b7.encode(attr_value.buffer);
+        if (!parts_res)
+            return fail<std::string>(errc::mime_parse_error, "mime format error", detail::codec_error_message(parts_res.error()));
+        attr_parts = std::move(*parts_res);
     }
     else if (attr_value.codec_type == codec::codec_t::QUOTED_PRINTABLE || attr_value.codec_type == codec::codec_t::BASE64)
     {
         q_codec qc(line1_policy, line_policy);
-        attr_parts = detail::expect_or_throw(qc.encode(attr_value.buffer, attr_value.charset, attr_value.codec_type));
+        auto parts_res = qc.encode(attr_value.buffer, attr_value.charset, attr_value.codec_type);
+        if (!parts_res)
+            return fail<std::string>(errc::mime_parse_error, "mime format error", detail::codec_error_message(parts_res.error()));
+        attr_parts = std::move(*parts_res);
     }
     else if (attr_value.codec_type == codec::codec_t::PERCENT)
     {
@@ -1180,7 +1269,7 @@ inline std::string mime::split_attributes(const std::string& attr_name, const st
     }
     else
     {
-        throw codec_error("Attribute codec not supported.");
+        return fail<std::string>(errc::mime_parse_error, "mime format error", "Attribute codec not supported.");
     }
 
     // Only one part means there is no continuation.
@@ -1191,7 +1280,7 @@ inline std::string mime::split_attributes(const std::string& attr_name, const st
             attr_str += ATTRIBUTE_CONTINUATION_INDICATOR + codec::EQUAL_CHAR + attr_parts.at(0);
         else
             attr_str += codec::EQUAL_CHAR + codec::QUOTE_STR + attr_parts.at(0) + codec::QUOTE_STR;
-        return attr_str;
+        return ok(std::move(attr_str));
     }
 
     // All parts as continuations.
@@ -1211,11 +1300,11 @@ inline std::string mime::split_attributes(const std::string& attr_name, const st
             attrs += ATTRIBUTES_SEPARATOR_STR + codec::END_OF_LINE;
     }
 
-    return attrs;
+    return ok(std::move(attrs));
 }
 
 
-inline void mime::merge_attributes(attributes_t& attributes) const
+inline result_void mime::merge_attributes(attributes_t& attributes) const
 {
     std::map<std::string, std::map<int, string_t>> attribute_parts;
     for (auto attr = attributes.begin(); attr != attributes.end(); )
@@ -1228,19 +1317,19 @@ inline void mime::merge_attributes(attributes_t& attributes) const
         std::string attr_name = full_attr_name;
         if (asterisk_pos != std::string::npos)
         {
-            try
+            attr_name = full_attr_name.substr(0, asterisk_pos);
+            if (asterisk_pos < full_attr_name.length() - 1)
             {
-                attr_name = full_attr_name.substr(0, asterisk_pos);
-                if (asterisk_pos < full_attr_name.length() - 1)
-                    attr_part = std::stoi(full_attr_name.substr(asterisk_pos + 1, 1));
-            }
-            catch (const std::invalid_argument& exc)
-            {
-                throw mime_error("Parsing attribute name error.", "Attribute name is `" + attr_name + "`.");
-            }
-            catch (const std::out_of_range& exc)
-            {
-                throw mime_error("Parsing attribute error.", "Attribute name is `" + attr_name + "`.");
+                const auto part_view = std::string_view(full_attr_name).substr(asterisk_pos + 1, 1);
+                int part_value = 0;
+                auto [ptr, ec] = std::from_chars(part_view.data(), part_view.data() + part_view.size(), part_value);
+                if (ec == std::errc::invalid_argument || ptr != part_view.data() + part_view.size())
+                    return fail_void(errc::mime_parse_error, "Parsing attribute name error.",
+                        "Attribute name is `" + attr_name + "`.");
+                if (ec == std::errc::result_out_of_range)
+                    return fail_void(errc::mime_parse_error, "Parsing attribute error.",
+                        "Attribute name is `" + attr_name + "`.");
+                attr_part = part_value;
             }
         }
         attribute_parts[attr_name][attr_part] = attr_value;
@@ -1264,15 +1353,19 @@ inline void mime::merge_attributes(attributes_t& attributes) const
             }
             attr_value += part->second;
         }
-        attributes[attr_name] = decode_value_attribute(attr_value.buffer);
+        string_t decoded;
+        MAILXX_TRY_ASSIGN(decoded, decode_value_attribute(attr_value.buffer));
+        attributes[attr_name] = std::move(decoded);
     }
+
+    return ok();
 }
 
 
-inline string_t mime::decode_value_attribute(const std::string& attr_value) const
+inline result<string_t> mime::decode_value_attribute(const std::string& attr_value) const
 {
     if (attr_value.empty())
-        return string_t();
+        return ok(string_t());
 
     // percent decoding
 
@@ -1281,18 +1374,26 @@ inline string_t mime::decode_value_attribute(const std::string& attr_value) cons
     {
         std::size_t language_pos = attr_value.find(codec::ATTRIBUTE_CHARSET_SEPARATOR, charset_pos + 1);
         if (language_pos == std::string::npos)
-            throw mime_error("Parsing attribute value error.", "No language parameter in the value `" + attr_value + "`.");
+            return fail<string_t>(errc::mime_parse_error, "Parsing attribute value error.",
+                "No language parameter in the value `" + attr_value + "`.");
 
         percent pct(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
-        return string_t(detail::expect_or_throw(pct.decode(attr_value.substr(language_pos + 1))),
-            attr_value.substr(0, charset_pos), codec::codec_t::PERCENT);
+        auto decoded = pct.decode(attr_value.substr(language_pos + 1));
+        if (!decoded)
+            return fail<string_t>(errc::mime_parse_error, "Parsing attribute value error.",
+                detail::codec_error_message(decoded.error()));
+        return ok(string_t(std::move(*decoded), attr_value.substr(0, charset_pos), codec::codec_t::PERCENT));
     }
 
     // Q decoding
 
     q_codec qc(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
-    auto av = detail::expect_or_throw(qc.check_decode(attr_value));
-    return string_t(std::get<0>(av), std::get<1>(av), std::get<2>(av));
+    auto av_res = qc.check_decode(attr_value);
+    if (!av_res)
+        return fail<string_t>(errc::mime_parse_error, "Parsing attribute value error.",
+            detail::codec_error_message(av_res.error()));
+    auto av = std::move(*av_res);
+    return ok(string_t(std::get<0>(av), std::get<1>(av), std::get<2>(av)));
 }
 
 
@@ -1335,7 +1436,7 @@ inline std::string mime::mime_type_as_str(media_type_t media_type_val) const
 }
 
 
-inline mime::media_type_t mime::mime_type_as_enum(const std::string& media_type_val) const
+inline result<mime::media_type_t> mime::mime_type_as_enum(const std::string& media_type_val) const
 {
     media_type_t media_type = media_type_t::NONE;
     if (boost::algorithm::iequals(media_type_val, "text"))
@@ -1353,8 +1454,9 @@ inline mime::media_type_t mime::mime_type_as_enum(const std::string& media_type_
     else if (boost::algorithm::iequals(media_type_val, "message"))
         media_type = media_type_t::MESSAGE;
     else if (strict_mode_)
-        throw mime_error("Bad media type.", "Given media type is `" + media_type_val + "`.");
-    return media_type;
+        return fail<media_type_t>(errc::mime_parse_error, "Bad media type.",
+            "Given media type is `" + media_type_val + "`.");
+    return ok(media_type);
 }
 
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <mailxx/export.hpp>
+#include <mailxx/config.hpp>
 
 #include <mailxx/codec/base64.hpp>
 #include <mailxx/codec/binary.hpp>
@@ -20,13 +20,10 @@
 #include <mailxx/net/upgradable_stream.hpp>
 
 #include <mailxx/imap/types.hpp>
-#include <mailxx/imap/error.hpp>
 #include <mailxx/imap/client.hpp>
 #include <mailxx/pop3/types.hpp>
-#include <mailxx/pop3/error.hpp>
 #include <mailxx/pop3/client.hpp>
 #include <mailxx/smtp/types.hpp>
-#include <mailxx/smtp/error.hpp>
 #include <mailxx/smtp/client.hpp>
 #include <mailxx/storage/maildir.hpp>
 #include <mailxx/storage/mbox.hpp>
@@ -34,6 +31,3 @@
 // Utilities
 #include <mailxx/detail/timeout_config.hpp>
 
-// Connection pooling
-#include <mailxx/pool/pool.hpp>
-#include <mailxx/pool/rate_limiter.hpp>

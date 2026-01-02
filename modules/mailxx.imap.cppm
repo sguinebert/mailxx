@@ -37,6 +37,5 @@ export import mailxx.mime;
 // Export IMAP headers
 export {
     #include <mailxx/imap/types.hpp>
-    #include <mailxx/imap/error.hpp>
     #include <mailxx/imap/client.hpp>
 }

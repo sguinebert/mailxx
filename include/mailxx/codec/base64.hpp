@@ -23,12 +23,8 @@ copy at http://www.freebsd.org/copyright/freebsd-license.html.
 #include <vector>
 #include <cctype>
 #include <mailxx/codec/codec.hpp>
-#include <mailxx/config.hpp>
-#if MAILXX_THROWING_ENABLED
-#include <mailxx/throwing.hpp>
-#endif
 #include <mailxx/detail/result.hpp>
-#include <mailxx/export.hpp>
+#include <mailxx/config.hpp>
 
 
 namespace mailxx
@@ -288,34 +284,6 @@ public:
         lines.push_back(current);
         return decode(lines);
     }
-
-    /**
-    Decoding a Base64 string to a string and throwing on error.
-
-    @param text Base64 encoded string.
-    @return     Decoded string.
-    @throw      codec_error on invalid base64 input.
-    **/
-    #if MAILXX_THROWING_ENABLED
-    std::string decode_or_throw(std::string_view text) const
-    {
-        return mailxx::unwrap(decode(text));
-    }
-    #endif
-
-    /**
-    Decoding a vector of Base64 encoded strings and throwing on error.
-
-    @param text Vector of Base64 encoded strings.
-    @return     Decoded string.
-    @throw      codec_error on invalid base64 input.
-    **/
-    #if MAILXX_THROWING_ENABLED
-    std::string decode_or_throw(const std::vector<std::string>& text) const
-    {
-        return mailxx::unwrap(decode(text));
-    }
-    #endif
 
 private:
     static std::string join_lines(const std::vector<std::string>& lines)

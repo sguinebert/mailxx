@@ -34,8 +34,6 @@ using mailxx::codec;
 using mailxx::message;
 using mailxx::string_t;
 using mailxx::pop3::client;
-using mailxx::pop3::error;
-using mailxx::net::dialog_error;
 using std::cout;
 using std::endl;
 using std::ofstream;
@@ -50,49 +48,68 @@ int main()
     boost::asio::co_spawn(io_ctx,
         [&]() -> boost::asio::awaitable<void>
         {
-            try
+            mailxx::pop3::options options;
+            options.tls.use_default_verify_paths = true;
+            options.tls.verify = mailxx::net::verify_mode::peer;
+            options.tls.verify_host = true;
+
+            client conn(io_ctx.get_executor(), options);
+            if (auto connect_res = co_await conn.connect("pop3.mailserver.com", "995",
+                mailxx::net::tls_mode::implicit, &ssl_ctx, "pop3.mailserver.com"); !connect_res)
             {
-                mailxx::pop3::options options;
-                options.tls.use_default_verify_paths = true;
-                options.tls.verify = mailxx::net::verify_mode::peer;
-                options.tls.verify_host = true;
-
-                client conn(io_ctx.get_executor(), options);
-                co_await conn.connect("pop3.mailserver.com", "995",
-                    mailxx::net::tls_mode::implicit, &ssl_ctx, "pop3.mailserver.com");
-                co_await conn.read_greeting();
-                // modify to use real account
-                co_await conn.login("mailxx@mailserver.com", "mailxxpass");
-
-                auto retr_res = co_await conn.retr(1);
-                if (!retr_res)
-                {
-                    print_error(retr_res.error());
-                    co_return;
-                }
-                std::string raw = retr_res.value();
-                message msg;
-                msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
-                msg.parse(raw);
-
-                ofstream ofs1("alepho.png", std::ios::binary);
-                string_t att1;
-                msg.attachment(1, ofs1, att1);
-                ofstream ofs2("infiniti.png", std::ios::binary);
-                string_t att2;
-                msg.attachment(2, ofs2, att2);
-                cout << "Received message with subject `" << msg.subject() << "` and attached files `" <<
-                    att1 << "` and `" << att2 << "` saved as `alepho.png` and `infiniti.png`." << endl;
-
-                co_await conn.quit();
+                print_error(connect_res.error());
+                co_return;
             }
-            catch (const error& exc)
+            if (auto greeting_res = co_await conn.read_greeting(); !greeting_res)
             {
-                cout << exc.what() << endl;
+                print_error(greeting_res.error());
+                co_return;
             }
-            catch (const dialog_error& exc)
+            // modify to use real account
+            if (auto login_res = co_await conn.login("mailxx@mailserver.com", "mailxxpass"); !login_res)
             {
-                cout << exc.what() << endl;
+                print_error(login_res.error());
+                co_return;
+            }
+
+            auto retr_res = co_await conn.retr(1);
+            if (!retr_res)
+            {
+                print_error(retr_res.error());
+                co_return;
+            }
+            std::string raw = retr_res.value();
+            message msg;
+            msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
+            auto parse_res = msg.parse(raw);
+            if (!parse_res)
+            {
+                print_error(parse_res.error());
+                co_return;
+            }
+            ofstream ofs1("alepho.png", std::ios::binary);
+            string_t att1;
+            auto att1_res = msg.attachment(1, ofs1, att1);
+            if (!att1_res)
+            {
+                print_error(att1_res.error());
+                co_return;
+            }
+            ofstream ofs2("infiniti.png", std::ios::binary);
+            string_t att2;
+            auto att2_res = msg.attachment(2, ofs2, att2);
+            if (!att2_res)
+            {
+                print_error(att2_res.error());
+                co_return;
+            }
+            cout << "Received message with subject `" << msg.subject() << "` and attached files `" <<
+                att1 << "` and `" << att2 << "` saved as `alepho.png` and `infiniti.png`." << endl;
+
+            if (auto quit_res = co_await conn.quit(); !quit_res)
+            {
+                print_error(quit_res.error());
+                co_return;
             }
             co_return;
         },
