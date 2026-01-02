@@ -5,8 +5,8 @@ asio_decl.hpp
 
 Copyright (C) 2025, Sylvain Guinebert (github.com/sguinebert).
 
-Distributed under the FreeBSD license, see the accompanying file LICENSE or
-copy at http://www.freebsd.org/copyright/freebsd-license.html.
+Distributed under the MIT license, see the accompanying file LICENSE or
+copy at https://opensource.org/licenses/MIT.
 
 Centralized Boost.Asio / standalone Asio declarations for mailxx.
 This header simplifies async notation throughout the library.

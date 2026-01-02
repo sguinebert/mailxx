@@ -320,6 +320,26 @@ target_sources(my_app
 - **Use App Passwords** for Gmail/Outlook when 2FA is enabled
 - **Prefer TLS/SSL** connections (port 465/993/995 or STARTTLS on 587/143/110)
 
+## ✅ Parsing & Strictness (Real-World Friendly by Default)
+
+mailxx defaults to **lenient parsing** to handle real‑world emails that are often not perfectly RFC‑compliant. This means the library tolerates common deviations (empty header values, unknown encodings, extra whitespace in parameters, etc.) and applies sensible fallbacks instead of failing.
+
+If you want strict RFC enforcement (validation, testing, or strict servers), enable strict modes explicitly:
+
+```cpp
+mailxx::message msg;
+msg.strict_mode(true);        // strict header parsing / validation
+msg.strict_codec_mode(true);  // strict codec validation (e.g., 7bit)
+```
+
+**What changes in strict mode:**
+- **Header parsing**: empty/invalid headers become errors instead of being defaulted.
+- **Unknown values**: unknown Content‑Transfer‑Encoding or Content‑Disposition cause failures.
+- **Parameter parsing**: extra whitespace/backslashes tolerated in lenient mode are rejected.
+- **Codec validation**: strict 7bit rejects non‑ASCII bytes.
+
+**Note on strict codec coverage:** `strict_codec_mode(true)` is currently enforced for 7bit validation. Base64, quoted‑printable, and 8bit decoding remain permissive. This matches the library's default real‑world tolerance and avoids rejecting common malformed inputs.
+
 ## 📋 Supported RFCs
 
 | RFC | Description |

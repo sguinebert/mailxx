@@ -8,8 +8,8 @@ Connects to POP3 server via SSL and fetches the first message from mailbox.
 
 Copyright (C) 2025, Sylvain Guinebert (github.com/sguinebert).
 
-Distributed under the FreeBSD license, see the accompanying file LICENSE or
-copy at http://www.freebsd.org/copyright/freebsd-license.html.
+Distributed under the MIT license, see the accompanying file LICENSE or
+copy at https://opensource.org/licenses/MIT.
 
 */
 

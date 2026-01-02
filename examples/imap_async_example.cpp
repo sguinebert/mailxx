@@ -7,7 +7,8 @@ Demonstrates the async IMAP v2 client with C++20 coroutines.
 
 Copyright (C) 2024, mailxx contributors.
 
-Distributed under the FreeBSD license.
+Distributed under the MIT license, see the accompanying file LICENSE or
+copy at https://opensource.org/licenses/MIT.
 
 */
 

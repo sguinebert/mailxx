@@ -2,8 +2,8 @@
 
 Copyright (C) 2025, Sylvain Guinebert.
 
-Distributed under the FreeBSD license, see the accompanying file LICENSE or
-copy at http://www.freebsd.org/copyright/freebsd-license.html.
+Distributed under the MIT license, see the accompanying file LICENSE or
+copy at https://opensource.org/licenses/MIT.
 
 */
 
@@ -104,8 +104,6 @@ public:
 
     /**
     Default move constructor.
-
-    @todo Default implementation is probably a bug, but not manifested yet.
     **/
     message(message&&) = default;
 
@@ -121,8 +119,6 @@ public:
 
     /**
     Default move assignment operator.
-
-    @todo Default implementation is probably a bug, but not manifested yet.
     **/
     message& operator=(message&&) = default;
 
