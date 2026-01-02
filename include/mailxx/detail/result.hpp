@@ -254,6 +254,11 @@ template<typename T = void>
     return detail::make_unexpected(std::move(err));
 }
 
+[[nodiscard]] inline result<void> fail_void(error_info err)
+{
+    return fail<void>(std::move(err));
+}
+
 template<typename T = void>
 [[nodiscard]] inline result<T> fail(
     errc c,

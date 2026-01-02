@@ -46,9 +46,9 @@ using mailxx::mail_address;
 using mailxx::mail_group;
 using mailxx::mime;
 using mailxx::message;
-using mailxx::mime_error;
-using mailxx::message_error;
-using mailxx::codec_error;
+// using mailxx::mime_error;
+// using mailxx::message_error;
+// using mailxx::codec_error;
 
 // Helper function to create a zoned_time from local datetime components and UTC offset
 inline std::chrono::zoned_time<std::chrono::seconds> make_zoned_time(
@@ -683,87 +683,47 @@ BOOST_AUTO_TEST_CASE(format_long_text_utf8_lat_qp)
     msg.content_transfer_encoding(mime::content_transfer_encoding_t::QUOTED_PRINTABLE);
     msg.content_type(message::media_type_t::TEXT, "plain", "utf-8");
     msg.line_policy(codec::line_len_policy_t::RECOMMENDED);
-    msg.content("This is a very long message that has blank lines and very long lines. It is not clear how the text will wrap
-"
-        "so I hope this text shows that.
-"
-        "
-"
-        "We should see how common mail clients wrap text, and based on that adjust message formatting. Maybe there is no need, because libmailxx is not meant to
-"
-        "format text.
-"
-        "
-"
-        "In any case, after checking ASCII we should also check UTF-8 characters and see how wrapping behaves when characters are multi-byte. It should not matter whether the encoding
-"
-        "is base64 or quoted printable, because ASCII characters wrap into new lines. This test should show whether there are bugs in the formatting logic,
-"
-        "and the same should be checked when parsing.
-"
-        "
-
-
-"
-        "Here is also a check for a sequence of blank lines.
-
-
-");
+    msg.content("This is a very long message that has blank lines and very long lines. It is not clear how the text will wrap\r\n"
+        "so I hope this text shows that.\r\n"
+        "\r\n"
+        "We should see how common mail clients wrap text, and based on that adjust message formatting. Maybe there is no need, because libmailxx is not meant to\r\n"
+        "format text.\r\n"
+        "\r\n"
+        "In any case, after checking ASCII we should also check UTF-8 characters and see how wrapping behaves when characters are multi-byte. It should not matter whether the encoding\r\n"
+        "is base64 or quoted printable, because ASCII characters wrap into new lines. This test should show whether there are bugs in the formatting logic,\r\n"
+        "and the same should be checked when parsing.\r\n"
+        "\r\n\r\n\r\n"
+        "Here is also a check for a sequence of blank lines.\r\n\r\n\r\n");
 
     string msg_str;
     BOOST_REQUIRE(msg.format(msg_str));
-    BOOST_CHECK(msg_str == "From: mailxx <adresa@mailxx.dev>
-"
-        "To: mailxx <adresa@mailxx.dev>
-"
-        "Date: Fri, 17 Jan 2014 05:39:22 -0730
-"
-        "Content-Type: text/plain; charset=utf-8
-"
-        "Content-Transfer-Encoding: Quoted-Printable
-"
-        "Subject: format long text utf8 latin quoted printable
-"
-        "
-"
-        "This is a very long message that has blank lines and very long lines. It is =
-"
-        "not clear how the text will wrap
-"
-        "so I hope this text shows that.
-"
-        "
-"
-        "We should see how common mail clients wrap text, and based on that adjust m=
-"
-        "essage formatting. Maybe there is no need, because libmailxx is not meant t=
-"
-        "o
-"
-        "format text.
-"
-        "
-"
-        "In any case, after checking ASCII we should also check UTF-8 characters and =
-"
-        "see how wrapping behaves when characters are multi-byte. It should not matt=
-"
-        "er whether the encoding
-"
-        "is base64 or quoted printable, because ASCII characters wrap into new lines=
-"
-        ". This test should show whether there are bugs in the formatting logic,
-"
-        "and the same should be checked when parsing.
-"
-        "
-"
-        "
-"
-        "
-"
-        "Here is also a check for a sequence of blank lines.
-");
+    BOOST_CHECK(msg_str ==
+        "From: mailxx <adresa@mailxx.dev>\r\n"
+        "To: mailxx <adresa@mailxx.dev>\r\n"
+        "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "Content-Transfer-Encoding: Quoted-Printable\r\n"
+        "Subject: format long text utf8 latin quoted printable\r\n"
+        "\r\n"
+        "This is a very long message that has blank lines and very long lines. It is =\r\n"
+        "not clear how the text will wrap\r\n"
+        "so I hope this text shows that.\r\n"
+        "\r\n"
+        "We should see how common mail clients wrap text, and based on that adjust m=\r\n"
+        "essage formatting. Maybe there is no need, because libmailxx is not meant t=\r\n"
+        "o\r\n"
+        "format text.\r\n"
+        "\r\n"
+        "In any case, after checking ASCII we should also check UTF-8 characters and =\r\n"
+        "see how wrapping behaves when characters are multi-byte. It should not matt=\r\n"
+        "er whether the encoding\r\n"
+        "is base64 or quoted printable, because ASCII characters wrap into new lines=\r\n"
+        ". This test should show whether there are bugs in the formatting logic,\r\n"
+        "and the same should be checked when parsing.\r\n"
+        "\r\n"
+        "\r\n"
+        "\r\n"
+        "Here is also a check for a sequence of blank lines.\r\n");
 }
 
 BOOST_AUTO_TEST_CASE(format_multipart_html_ascii_bit7_text_ascii_base64)
