@@ -17,14 +17,16 @@
 - **Connection Pooling**: Built-in connection pool with automatic reconnection
 - **Rate Limiting**: Token bucket algorithm for API rate limiting
 - **Flexible Asio**: Works with both Boost.Asio and standalone Asio
+- **Real-World Validation CLI**: Bundled `CLI11` executable for SMTP / IMAP / POP3 field testing with verbose logs
+- **Explicit Low-Level I/O**: Borrowed-view vs owned-buffer write APIs without hidden ownership guesses
 
 ## 📧 Protocol Support
 
 | Protocol | Coverage | Key Features |
 |----------|----------|--------------|
-| **SMTP** | 100% | PIPELINING, SIZE, 8BITMIME, SMTPUTF8, DSN, AUTH (LOGIN, PLAIN, CRAM-MD5) |
-| **IMAP** | 98% | IDLE, NAMESPACE, QUOTA, SORT/THREAD, SEARCH, Folder management |
-| **POP3** | 95% | UIDL, TOP, STAT, LIST, Authentication |
+| **SMTP** | 100% | PIPELINING, SIZE, 8BITMIME, SMTPUTF8, DSN, AUTH (LOGIN, PLAIN, CRAM-MD5), STARTTLS |
+| **IMAP** | Core client validated | CAPABILITY, LOGIN/PLAIN, LIST, SELECT, SEARCH, FETCH, IDLE |
+| **POP3** | Core client validated | UIDL, TOP, STAT, LIST, USER/PASS, PLAIN, LOGIN, APOP |
 
 ## 🚀 Quick Start
 
@@ -221,6 +223,87 @@ mailxx::smtp::dsn_options dsn{
 
 auto reply = co_await smtp.send(msg, dsn);
 ```
+
+## Real-World Validation CLI
+
+The repository ships a `CLI11`-based validation executable under `tools/` for protocol-level testing against real servers.
+
+### Build
+
+```bash
+cmake -S . -B build \
+  -Dmailxx_BUILD_REALWORLD_CLI=ON \
+  -Dmailxx_BUILD_TESTS=ON
+
+cmake --build build --target mailxx_realworld_cli
+```
+
+### Examples
+
+```bash
+# SMTP relay / port 25
+build/tools/mailxx_realworld_cli smtp \
+  --host localhost --port 25 --tls-mode none \
+  --from test.fse@caveo.fr --to test.fse@caveo.fr
+
+# Submission / port 587 with STARTTLS + AUTH
+build/tools/mailxx_realworld_cli smtp \
+  --host localhost --port 587 --tls-mode starttls --insecure \
+  --username test.fse@caveo.fr --secret 'secret' --auth-method plain \
+  --from test.fse@caveo.fr --to test.fse@caveo.fr
+
+# IMAP
+build/tools/mailxx_realworld_cli imap \
+  --host localhost --port 143 --tls-mode none \
+  --username test.fse@caveo.fr --secret 'secret' \
+  --auth-method login --allow-cleartext-auth \
+  --mailbox INBOX --search ALL
+
+# POP3 / APOP
+build/tools/mailxx_realworld_cli pop3 \
+  --host localhost --port 110 --tls-mode none \
+  --username test.fse@caveo.fr --secret 'secret' \
+  --auth-method apop --message-no 1 --top-lines 20
+```
+
+Validated real-world paths:
+- SMTP on port `25`
+- SMTP submission on port `587` with `STARTTLS + AUTH`
+- POP3 on port `110` with `LOGIN` and `APOP`
+- IMAP on port `143`
+
+## Low-Level Dialog API
+
+`mailxx::net::dialog` now exposes explicit write contracts only:
+
+```cpp
+co_await dlg.write_line_view_r("NOOP");
+
+std::string_view chunk = payload;
+co_await dlg.write_raw_view_r(chunk);
+
+co_await dlg.write_raw_r(std::move(payload));
+co_await dlg.write_raw_buffer_r(chunk, std::move(owner));
+```
+
+Notes:
+- `write_line_view*` takes a logical line and appends `CRLF` on the wire.
+- `write_line_buffer*` is for advanced cases where the view and the owner are distinct.
+- `write_raw*` never performs implicit ownership selection.
+
+## Breaking Changes
+
+The following deprecated or ambiguous APIs were removed:
+
+- `mime::header_codec()`
+- `mime::line_policy(encoder, decoder)`
+- `codec::line_len_policy_t::VERYLARGE`
+- `dialog::write_line(std::string&&)` public entry point
+
+Migration summary:
+- use explicit `string_t` codecs on values instead of a mutable header codec policy
+- use `line_policy(codec::line_len_policy_t)` only
+- use `write_line_view*`, `write_line_buffer*`, `write_raw*`, `write_raw_view*`, `write_raw_buffer*`
 
 ## Project Structure
 ```
