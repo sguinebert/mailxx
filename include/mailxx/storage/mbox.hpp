@@ -18,6 +18,28 @@ Minimal mbox reader/writer without external dependencies.
 namespace mailxx::storage
 {
 
+namespace detail
+{
+
+[[nodiscard]] inline bool is_mbox_from_separator(std::string_view line)
+{
+    return line.rfind("From ", 0) == 0;
+}
+
+[[nodiscard]] inline bool requires_mbox_escape(std::string_view line)
+{
+    while (!line.empty() && line.front() == '>')
+        line.remove_prefix(1);
+    return is_mbox_from_separator(line);
+}
+
+[[nodiscard]] inline bool is_mbox_escaped_from(std::string_view line)
+{
+    return !line.empty() && line.front() == '>' && requires_mbox_escape(line.substr(1));
+}
+
+} // namespace detail
+
 struct from_line_metadata
 {
     std::string sender;
@@ -36,10 +58,6 @@ public:
 
         std::string message;
         bool started = false;
-
-        auto is_from_separator = [](std::string_view line) {
-            return line.rfind("From ", 0) == 0;
-        };
 
         auto consume_line = [this](std::string& line) -> bool {
             if (!std::getline(*in_, line))
@@ -68,7 +86,7 @@ public:
 
             if (!started)
             {
-                if (is_from_separator(line))
+                if (detail::is_mbox_from_separator(line))
                 {
                     started = true;
                     continue; // Separator consumed, start collecting
@@ -76,14 +94,14 @@ public:
                 continue; // Skip until first separator
             }
 
-            if (is_from_separator(line))
+            if (detail::is_mbox_from_separator(line))
             {
                 // Boundary for next message.
                 lookahead_from_separator_ = true;
                 return message;
             }
 
-            if (line.rfind(">From ", 0) == 0)
+            if (detail::is_mbox_escaped_from(line))
                 line.erase(0, 1);
             message += line;
             message.push_back('\n');
@@ -107,13 +125,13 @@ public:
         (*out_) << "From " << meta.sender << " " << meta.date << "\n";
 
         auto flush_line = [this](std::string_view line) {
-            if (line.rfind("From ", 0) == 0)
+            if (detail::requires_mbox_escape(line))
                 (*out_) << '>';
             (*out_) << line << "\n";
         };
 
         std::size_t start = 0;
-        while (start <= rfc822.size())
+        while (start < rfc822.size())
         {
             auto pos = rfc822.find('\n', start);
             if (pos == std::string_view::npos)

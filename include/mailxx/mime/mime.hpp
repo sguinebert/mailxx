@@ -502,16 +502,7 @@ public:
     std::vector<mime> parts() const;
 
     /**
-    Setting the message decoding and encoding line policy.
-
-    @param encoder_line_policy Encoder line policy to set.
-    @param decoder_line_policy Decoder line policy to set.
-    **/
-    [[deprecated]]
-    void line_policy(codec::line_len_policy_t encoder_line_policy, codec::line_len_policy_t decoder_line_policy);
-
-    /**
-    Setting the message decoding and encoding line policy.
+    Setting the line policy used for both formatting and parsing.
 
     @param line_policy Line policy to set.
     **/
@@ -551,24 +542,6 @@ public:
     @return True if strict mode enabled, false if disabled.
     **/
     bool strict_codec_mode() const;
-
-    using header_codec_t = codec::codec_t;
-
-    /**
-    Setting the headers codec.
-
-    @param hdr_codec Codec to set.
-    **/
-    [[deprecated]]
-    void header_codec(header_codec_t hdr_codec);
-
-    /**
-    Getting the headers codec.
-
-    @return Codec set.
-    **/
-    [[deprecated]]
-    header_codec_t header_codec() const;
 
 protected:
 
@@ -947,12 +920,6 @@ protected:
     bool strict_codec_mode_;
 
     /**
-    Codec used for headers.
-    **/
-    [[deprecated]]
-    header_codec_t header_codec_;
-
-    /**
     Content type as a pair of top level media type and media subtype.
     **/
     content_type_t content_type_;
@@ -1043,6 +1010,7 @@ inline result_void mime::format_to(detail::output_sink& sink, bool dot_escape) c
     std::string header;
     MAILXX_TRY_ASSIGN(header, format_header());
     sink.write(header);
+    sink.write(codec::END_OF_LINE);
 
     if (!parts_.empty())
     {

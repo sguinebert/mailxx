@@ -342,8 +342,7 @@ public:
     /**
     Line length policy.
     **/
-    enum class line_len_policy_t : std::string::size_type {RECOMMENDED = 78, MANDATORY = 998, NONE = UINT_MAX,
-        VERYLARGE [[deprecated]] = 16384};
+    enum class line_len_policy_t : std::string::size_type {RECOMMENDED = 78, MANDATORY = 998, NONE = UINT_MAX};
 
     /**
     Methods used for the MIME header encoding/decoding.

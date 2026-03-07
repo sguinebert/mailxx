@@ -876,6 +876,9 @@ result_void inline message::format(std::u8string& message_str, const message_for
 result_void inline message::parse(const std::string& message_str, bool dot_escape)
 {
     message msg;
+    msg.line_policy(line_policy_);
+    msg.strict_mode(strict_mode_);
+    msg.strict_codec_mode(strict_codec_mode_);
     msg.parse_error_.reset();
     auto parse_res = msg.mime::parse(message_str, dot_escape);
     if (!parse_res)
@@ -2743,9 +2746,11 @@ result<std::chrono::zoned_time<std::chrono::seconds>> inline message::parse_date
     if (!parse_int(sv, 4, 4, year))
         return fail_generic();
 
-    // time hh:mm:ss
+    // time hh:mm[:ss]
     int hour = 0, minute = 0, second = 0;
-    if (!parse_int(sv, 2, 2, hour) || !consume_char(sv, ':') || !parse_int(sv, 2, 2, minute) || !consume_char(sv, ':') || !parse_int(sv, 2, 2, second))
+    if (!parse_int(sv, 2, 2, hour) || !consume_char(sv, ':') || !parse_int(sv, 2, 2, minute))
+        return fail_generic();
+    if (consume_char(sv, ':') && !parse_int(sv, 2, 2, second))
         return fail_generic();
 
     // timezone +HHMM / -HHMM

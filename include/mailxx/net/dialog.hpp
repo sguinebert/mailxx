@@ -15,6 +15,8 @@ copy at https://opensource.org/licenses/MIT.
 
 #include <string>
 #include <string_view>
+#include <array>
+#include <concepts>
 #include <memory>
 #include <optional>
 #include <chrono>
@@ -42,6 +44,43 @@ template<typename R, typename... Args>
 struct signature_arity<R(Args...)> : std::integral_constant<std::size_t, sizeof...(Args)>
 {
 };
+
+template<typename Buffer>
+concept buffer_view = requires(Buffer&& buffer)
+{
+    { mailxx::asio::buffer(std::forward<Buffer>(buffer)) };
+    { mailxx::asio::const_buffer(mailxx::asio::buffer(std::forward<Buffer>(buffer))) };
+};
+
+template<typename Owner>
+concept buffer_owner = std::movable<std::remove_reference_t<Owner>>;
+
+template<typename Buffer>
+concept borrowed_buffer_view =
+    buffer_view<Buffer> && std::is_lvalue_reference_v<Buffer&&>;
+
+template<typename Owner>
+concept movable_buffer_owner =
+    buffer_view<std::remove_reference_t<Owner>&> &&
+    buffer_owner<Owner> &&
+    (!std::is_lvalue_reference_v<Owner&&>);
+
+template<typename Line>
+concept line_view = std::convertible_to<Line, std::string_view>;
+
+template<typename Line>
+concept borrowed_line_view =
+    line_view<Line> && std::is_lvalue_reference_v<Line&&>;
+
+template<typename Line>
+concept static_line_literal =
+    std::is_array_v<std::remove_reference_t<Line>> &&
+    std::same_as<std::remove_extent_t<std::remove_reference_t<Line>>, const char> &&
+    std::is_lvalue_reference_v<Line&&>;
+
+template<typename Line>
+concept line_input =
+    borrowed_line_view<Line> || static_line_literal<Line>;
 } // namespace detail
 
 // Import Asio types from the centralized declarations
@@ -120,32 +159,86 @@ public:
     }
 
     /**
-    Sending a line to network asynchronously.
+    Sending a borrowed line view to the network asynchronously.
 
-    @param line  Line to send (CRLF added if missing).
-    @param token Completion token (callback, use_awaitable, etc.).
+    Borrowed-view path: the caller keeps ownership and must guarantee that the
+    view stays alive until completion. The API accepts a logical command line
+    and adds the trailing CRLF framing without mutating or copying the line.
+
+    Example:
+        std::string line = "EHLO localhost";
+        std::string_view view(line);
+        co_await dlg.write_line_view_r(view);
     **/
-    template<typename CompletionToken>
-    auto write_line(std::string_view line, CompletionToken&& token)
+    template<detail::line_input Line, typename CompletionToken>
+    auto write_line_view(Line&& line, CompletionToken&& token)
     {
-        std::string payload = normalize_line(line);
-        trace_line(mailxx::log::direction::send, payload);
-        return async_with_timeout<void(asio::error_code, std::size_t)>(
-            [this, payload = std::move(payload)](auto handler) mutable
-            {
-                asio::async_write(stream_, asio::buffer(payload), std::move(handler));
-            }, std::forward<CompletionToken>(token));
+        const std::string_view view(line);
+        const auto framing = classify_line_framing(view);
+        if (framing == line_framing::invalid)
+            return fail_write_operation(detail::make_err(asio::error::invalid_argument),
+                std::forward<CompletionToken>(token));
+
+        trace_line(mailxx::log::direction::send, view);
+        return write_line_sequence(view, framing == line_framing::append_crlf,
+            nullptr, std::forward<CompletionToken>(token));
     }
 
-    [[nodiscard]] awaitable<mailxx::result<void>> write_line_r(std::string_view line)
+    /**
+    Sending a borrowed line view with an explicit external owner.
+
+    Advanced path: the caller supplies a CRLF-normalized line view together with
+    a separate owner object whose lifetime is transferred to the async
+    operation.
+
+    Example:
+        auto owner = std::make_shared<std::string>("EHLO localhost");
+        std::string_view view(*owner);
+        co_await dlg.write_line_buffer_r(view, std::move(owner));
+    **/
+    template<detail::line_input Line, typename Owner, typename CompletionToken>
+        requires(detail::buffer_owner<Owner> && !std::is_lvalue_reference_v<Owner&&>)
+    auto write_line_buffer(Line&& line, Owner&& owner, CompletionToken&& token)
     {
-        auto [ec, bytes] = co_await write_line(line, use_nothrow_awaitable);
+        const std::string_view view(line);
+        const auto framing = classify_line_framing(view);
+        if (framing == line_framing::invalid)
+            return fail_write_operation(detail::make_err(asio::error::invalid_argument),
+                std::forward<CompletionToken>(token));
+
+        trace_line(mailxx::log::direction::send, view);
+        return write_line_sequence(view, framing == line_framing::append_crlf,
+            std::forward<Owner>(owner), std::forward<CompletionToken>(token));
+    }
+
+    template<detail::line_input Line>
+    [[nodiscard]] awaitable<mailxx::result<void>> write_line_view_r(Line&& line)
+    {
+        auto [ec, bytes] = co_await write_line_view(std::forward<Line>(line), use_nothrow_awaitable);
         (void)bytes;
         const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
         if (ec)
         {
             const errc code = map_net_error(io_stage::write, ec, timeout_triggered);
-            auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::write, "write_line");
+            auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::write, "write_line_view");
+            detail.add("sys", format_sys(ec));
+            co_return mailxx::fail<void>(code, "net write failed", std::move(detail), ec);
+        }
+        co_return mailxx::ok();
+    }
+
+    template<detail::line_input Line, typename Owner>
+        requires(detail::buffer_owner<Owner> && !std::is_lvalue_reference_v<Owner&&>)
+    [[nodiscard]] awaitable<mailxx::result<void>> write_line_buffer_r(Line&& line, Owner&& owner)
+    {
+        auto [ec, bytes] = co_await write_line_buffer(std::forward<Line>(line),
+            std::forward<Owner>(owner), use_nothrow_awaitable);
+        (void)bytes;
+        const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
+        if (ec)
+        {
+            const errc code = map_net_error(io_stage::write, ec, timeout_triggered);
+            auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::write, "write_line_buffer");
             detail.add("sys", format_sys(ec));
             co_return mailxx::fail<void>(code, "net write failed", std::move(detail), ec);
         }
@@ -153,31 +246,103 @@ public:
     }
 
     /**
-    Writing raw buffers to network asynchronously.
+    Writing an owned buffer to the network asynchronously.
 
-    @param buffers Buffers to write.
-    @param token   Completion token.
+    Moved-owner path: the caller transfers ownership of the container to the
+    async operation. The framework keeps that owner alive until completion, so
+    no extra byte copy is performed.
+
+    Example:
+        std::string payload = build_payload();
+        co_await dlg.write_raw_r(std::move(payload));
     **/
-    template<typename ConstBufferSequence, typename CompletionToken>
-    auto write_raw(const ConstBufferSequence& buffers, CompletionToken&& token)
+    template<detail::movable_buffer_owner Owner, typename CompletionToken>
+    auto write_raw(Owner&& owner, CompletionToken&& token)
     {
-        return async_with_timeout<void(asio::error_code, std::size_t)>(
-            [this, buffers](auto handler) mutable
-            {
-                asio::async_write(stream_, buffers, std::move(handler));
-            }, std::forward<CompletionToken>(token));
+        return write_owned_buffer(std::forward<Owner>(owner), std::forward<CompletionToken>(token));
     }
 
-    template<typename ConstBufferSequence>
-    [[nodiscard]] awaitable<mailxx::result<void>> write_raw_r(const ConstBufferSequence& buffers)
+    /**
+    Writing a raw buffer view to the network asynchronously.
+
+    Borrowed-view path: the caller is responsible for keeping the referenced
+    memory alive until the completion handler runs.
+
+    Example:
+        std::string payload = build_payload();
+        std::string_view chunk(payload.data(), payload.size());
+        co_await dlg.write_raw_view_r(chunk);
+    **/
+    template<detail::borrowed_buffer_view Buffer, typename CompletionToken>
+    auto write_raw_view(Buffer&& view, CompletionToken&& token)
     {
-        auto [ec, bytes] = co_await write_raw(buffers, use_nothrow_awaitable);
+        return write_buffer_owned(asio::const_buffer(asio::buffer(view)),
+            nullptr, std::forward<CompletionToken>(token));
+    }
+
+    /**
+    Writing a raw buffer view with an explicit external owner.
+
+    Advanced path: the caller supplies both the view and a separate owner object
+    whose lifetime must be transferred to the async operation.
+
+    Example:
+        auto owner = std::make_shared<std::string>(build_payload());
+        std::string_view chunk(owner->data(), owner->size());
+        co_await dlg.write_raw_buffer_r(chunk, std::move(owner));
+    **/
+    template<detail::borrowed_buffer_view Buffer, typename Owner, typename CompletionToken>
+        requires(detail::buffer_owner<Owner> && !std::is_lvalue_reference_v<Owner&&>)
+    auto write_raw_buffer(Buffer&& view, Owner&& owner, CompletionToken&& token)
+    {
+        return write_buffer_owned(asio::const_buffer(asio::buffer(view)),
+            std::forward<Owner>(owner), std::forward<CompletionToken>(token));
+    }
+
+    template<detail::movable_buffer_owner Owner>
+    [[nodiscard]] awaitable<mailxx::result<void>> write_raw_r(Owner&& owner)
+    {
+        auto [ec, bytes] = co_await write_raw(std::forward<Owner>(owner), use_nothrow_awaitable);
         (void)bytes;
         const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
         if (ec)
         {
             const errc code = map_net_error(io_stage::write, ec, timeout_triggered);
             auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::write, "write_raw");
+            detail.add("sys", format_sys(ec));
+            co_return mailxx::fail<void>(code, "net write failed", std::move(detail), ec);
+        }
+        co_return mailxx::ok();
+    }
+
+    template<detail::borrowed_buffer_view Buffer>
+    [[nodiscard]] awaitable<mailxx::result<void>> write_raw_view_r(Buffer&& view)
+    {
+        auto [ec, bytes] = co_await write_raw_view(std::forward<Buffer>(view), use_nothrow_awaitable);
+        (void)bytes;
+        const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
+        if (ec)
+        {
+            const errc code = map_net_error(io_stage::write, ec, timeout_triggered);
+            auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::write, "write_raw_view");
+            detail.add("sys", format_sys(ec));
+            co_return mailxx::fail<void>(code, "net write failed", std::move(detail), ec);
+        }
+        co_return mailxx::ok();
+    }
+
+    template<detail::borrowed_buffer_view Buffer, typename Owner>
+        requires(detail::buffer_owner<Owner> && !std::is_lvalue_reference_v<Owner&&>)
+    [[nodiscard]] awaitable<mailxx::result<void>> write_raw_buffer_r(Buffer&& view, Owner&& owner)
+    {
+        auto [ec, bytes] = co_await write_raw_buffer(std::forward<Buffer>(view),
+            std::forward<Owner>(owner), use_nothrow_awaitable);
+        (void)bytes;
+        const bool timeout_triggered = detail::is_err(ec, asio::error::timed_out);
+        if (ec)
+        {
+            const errc code = map_net_error(io_stage::write, ec, timeout_triggered);
+            auto detail = make_net_detail(trace_protocol_, peer_host_, peer_service_, io_stage::write, "write_raw_buffer");
             detail.add("sys", format_sys(ec));
             co_return mailxx::fail<void>(code, "net write failed", std::move(detail), ec);
         }
@@ -402,25 +567,198 @@ public:
     [[nodiscard]] std::optional<duration> timeout() const noexcept { return timeout_; }
 
 protected:
-    static std::string normalize_line(std::string_view line)
+    template<typename CompletionToken>
+    auto fail_write_operation(asio::error_code ec, CompletionToken&& token)
+    {
+        return asio::async_compose<CompletionToken, void(asio::error_code, std::size_t)>(
+            [ec](auto& self) mutable
+            {
+                self.complete(ec, 0);
+            }, std::forward<CompletionToken>(token), stream_);
+    }
+
+    template<detail::buffer_owner Owner, typename CompletionToken>
+    auto write_owned_buffer(Owner&& owner, CompletionToken&& token)
+    {
+        using owner_type = std::decay_t<Owner>;
+        return asio::async_compose<CompletionToken, void(asio::error_code, std::size_t)>(
+            [this, owner = owner_type(std::forward<Owner>(owner)), offset = std::size_t{0}, started = false](
+                auto& self, asio::error_code ec = {}, std::size_t bytes = 0) mutable
+            {
+                const asio::const_buffer full_buffer(asio::buffer(owner));
+                if (!started)
+                {
+                    started = true;
+                }
+                else if (ec)
+                {
+                    self.complete(ec, offset);
+                    return;
+                }
+                else
+                {
+                    if (bytes == 0 && offset < full_buffer.size())
+                    {
+                        self.complete(detail::make_err(asio::error::eof), offset);
+                        return;
+                    }
+
+                    offset += bytes;
+                    if (offset >= full_buffer.size())
+                    {
+                        self.complete(ec, offset);
+                        return;
+                    }
+                }
+
+                const asio::const_buffer remaining = full_buffer + offset;
+                async_with_timeout<void(asio::error_code, std::size_t)>(
+                    [this, remaining](auto handler) mutable
+                    {
+                        stream_.async_write_some(remaining, std::move(handler));
+                    },
+                    std::move(self));
+            }, std::forward<CompletionToken>(token), stream_);
+    }
+
+    template<std::size_t N, detail::buffer_owner Owner, typename CompletionToken>
+    auto write_buffer_sequence_owned(std::array<asio::const_buffer, N> buffers, Owner&& owner, CompletionToken&& token)
+    {
+        using owner_type = std::decay_t<Owner>;
+        return asio::async_compose<CompletionToken, void(asio::error_code, std::size_t)>(
+            [this, buffers = std::move(buffers), owner = owner_type(std::forward<Owner>(owner)),
+                index = std::size_t{0}, offset = std::size_t{0}, total = std::size_t{0}, started = false](
+                auto& self, asio::error_code ec = {}, std::size_t bytes = 0) mutable
+            {
+                auto advance_to_next_non_empty = [&]() mutable
+                {
+                    while (index < N)
+                    {
+                        const asio::const_buffer current = buffers[index];
+                        if (offset < current.size())
+                            return;
+                        ++index;
+                        offset = 0;
+                    }
+                };
+
+                if (!started)
+                {
+                    started = true;
+                    advance_to_next_non_empty();
+                    if (index >= N)
+                    {
+                        self.complete(ec, total);
+                        return;
+                    }
+                }
+                else if (ec)
+                {
+                    self.complete(ec, total);
+                    return;
+                }
+                else
+                {
+                    const asio::const_buffer current = buffers[index];
+                    if (bytes == 0 && offset < current.size())
+                    {
+                        self.complete(detail::make_err(asio::error::eof), total);
+                        return;
+                    }
+
+                    total += bytes;
+                    offset += bytes;
+                    advance_to_next_non_empty();
+                    if (index >= N)
+                    {
+                        self.complete(ec, total);
+                        return;
+                    }
+                }
+
+                const asio::const_buffer current = buffers[index] + offset;
+                async_with_timeout<void(asio::error_code, std::size_t)>(
+                    [this, current](auto handler) mutable
+                    {
+                        stream_.async_write_some(current, std::move(handler));
+                    },
+                    std::move(self));
+            }, std::forward<CompletionToken>(token), stream_);
+    }
+
+    template<detail::buffer_owner Owner, typename CompletionToken>
+    auto write_buffer_owned(asio::const_buffer buffer, Owner&& owner, CompletionToken&& token)
+    {
+        using owner_type = std::decay_t<Owner>;
+        return asio::async_compose<CompletionToken, void(asio::error_code, std::size_t)>(
+            [this, remaining = buffer, owner = owner_type(std::forward<Owner>(owner)), total = std::size_t{0}, started = false](
+                auto& self, asio::error_code ec = {}, std::size_t bytes = 0) mutable
+            {
+                if (!started)
+                {
+                    started = true;
+                }
+                else if (ec)
+                {
+                    self.complete(ec, total);
+                    return;
+                }
+                else
+                {
+                    if (bytes == 0 && remaining.size() != 0)
+                    {
+                        self.complete(detail::make_err(asio::error::eof), total);
+                        return;
+                    }
+
+                    total += bytes;
+                    remaining = remaining + bytes;
+                    if (remaining.size() == 0)
+                    {
+                        self.complete(ec, total);
+                        return;
+                    }
+                }
+
+                async_with_timeout<void(asio::error_code, std::size_t)>(
+                    [this, remaining](auto handler) mutable
+                    {
+                        stream_.async_write_some(remaining, std::move(handler));
+                    },
+                    std::move(self));
+            }, std::forward<CompletionToken>(token), stream_);
+    }
+
+    enum class line_framing
+    {
+        as_is,
+        append_crlf,
+        invalid
+    };
+
+    [[nodiscard]] static line_framing classify_line_framing(std::string_view line) noexcept
     {
         if (line.size() >= 2 && line.substr(line.size() - 2) == "\r\n")
-            return std::string(line);
-        if (!line.empty() && line.back() == '\n')
         {
-            std::string out(line.substr(0, line.size() - 1));
-            out += "\r\n";
-            return out;
+            const auto body = line.substr(0, line.size() - 2);
+            return (body.find('\r') == std::string_view::npos && body.find('\n') == std::string_view::npos)
+                ? line_framing::as_is
+                : line_framing::invalid;
         }
-        if (!line.empty() && line.back() == '\r')
-        {
-            std::string out(line);
-            out += "\n";
-            return out;
-        }
-        std::string out(line);
-        out += "\r\n";
-        return out;
+        if (line.find('\r') != std::string_view::npos || line.find('\n') != std::string_view::npos)
+            return line_framing::invalid;
+        return line_framing::append_crlf;
+    }
+
+    template<detail::buffer_owner Owner, typename CompletionToken>
+    auto write_line_sequence(std::string_view line, bool append_crlf, Owner&& owner, CompletionToken&& token)
+    {
+        std::array<asio::const_buffer, 2> buffers{
+            asio::const_buffer(line.data(), line.size()),
+            append_crlf ? asio::const_buffer(k_crlf, 2) : asio::const_buffer()
+        };
+        return write_buffer_sequence_owned(std::move(buffers), std::forward<Owner>(owner),
+            std::forward<CompletionToken>(token));
     }
 
     Stream stream_;
@@ -432,6 +770,7 @@ protected:
     std::string peer_service_;
     std::string trace_protocol_{"NET"};
     bool redact_secrets_in_trace_{true};
+    inline static constexpr char k_crlf[3] = "\r\n";
 
     void trace_line(mailxx::log::direction dir, std::string_view data) const
     {

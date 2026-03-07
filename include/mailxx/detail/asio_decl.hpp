@@ -42,6 +42,10 @@ namespace mailxx::asio
     // Core types
     using ::asio::awaitable;
     using ::asio::buffer;
+    using ::asio::buffer_copy;
+    using ::asio::buffer_size;
+    using ::asio::const_buffer;
+    using ::asio::mutable_buffer;
     using ::asio::co_spawn;
     using ::asio::detached;
     using ::asio::use_awaitable;
@@ -122,6 +126,10 @@ namespace mailxx::asio
     // Core types
     using boost::asio::awaitable;
     using boost::asio::buffer;
+    using boost::asio::buffer_copy;
+    using boost::asio::buffer_size;
+    using boost::asio::const_buffer;
+    using boost::asio::mutable_buffer;
     using boost::asio::co_spawn;
     using boost::asio::detached;
     using boost::asio::use_awaitable;

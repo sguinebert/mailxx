@@ -178,6 +178,7 @@ public:
         std::string::size_type question_mark_counter = 0;
         const std::string::size_type QUESTION_MARKS_NO = 4;
         bool is_encoded = false;
+        bool just_decoded_encoded_word = false;
         std::string dec_text, encoded_part;
         std::string charset = CHARSET_ASCII;
         // If there is no q encoding, then it's ascii or utf8.
@@ -200,14 +201,30 @@ public:
                 dec_text += std::get<0>(*text_charset);
                 charset = std::get<1>(*text_charset);
                 method_type = std::get<2>(*text_charset);
+                just_decoded_encoded_word = true;
 
                 encoded_part.clear();
                 ch++;
             }
             else if (is_encoded == true)
                 encoded_part.append(1, *ch);
-            else
+            else if (just_decoded_encoded_word && std::isspace(static_cast<unsigned char>(*ch)))
+            {
+                auto next = ch;
+                while (next != text.end() && std::isspace(static_cast<unsigned char>(*next)))
+                    ++next;
+
+                if (next != text.end() && *next == codec::EQUAL_CHAR && next + 1 != text.end() && *(next + 1) == codec::QUESTION_MARK_CHAR)
+                    continue;
+
                 dec_text.append(1, *ch);
+                just_decoded_encoded_word = false;
+            }
+            else
+            {
+                dec_text.append(1, *ch);
+                just_decoded_encoded_word = false;
+            }
         }
 
         if (is_encoded && question_mark_counter < QUESTION_MARKS_NO)

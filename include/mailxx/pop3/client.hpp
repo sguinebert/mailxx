@@ -28,8 +28,10 @@ copy at https://opensource.org/licenses/MIT.
 #include <sstream>
 #include <tuple>
 #include <optional>
+#include <memory>
 #include <system_error>
-#include <openssl/md5.h>
+#include <array>
+#include <openssl/evp.h>
 #include <mailxx/detail/asio_decl.hpp>
 #include <mailxx/net/upgradable_stream.hpp>
 #include <mailxx/net/dialog.hpp>
@@ -604,20 +606,41 @@ private:
         return ok(std::string(greeting_line.substr(start, end - start + 1)));
     }
 
-    static std::string md5_hex(std::string_view input)
+    static result<std::string> md5_hex(std::string_view input)
     {
-        unsigned char digest[MD5_DIGEST_LENGTH];
-        MD5(reinterpret_cast<const unsigned char*>(input.data()), input.size(), digest);
+        std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+        unsigned int digest_len = 0;
+
+        EVP_MD_CTX* raw_ctx = EVP_MD_CTX_new();
+        if (raw_ctx == nullptr)
+            return fail<std::string>(map_pop3_error(error_kind::invalid_state),
+                "MD5 context allocation failure.",
+                make_pop3_detail("APOP", "EVP_MD_CTX_new"));
+
+        std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> ctx(raw_ctx, &EVP_MD_CTX_free);
+        if (EVP_DigestInit_ex(ctx.get(), EVP_md5(), nullptr) != 1)
+            return fail<std::string>(map_pop3_error(error_kind::invalid_state),
+                "MD5 init failure.",
+                make_pop3_detail("APOP", "EVP_DigestInit_ex"));
+        if (EVP_DigestUpdate(ctx.get(), input.data(), input.size()) != 1)
+            return fail<std::string>(map_pop3_error(error_kind::invalid_state),
+                "MD5 update failure.",
+                make_pop3_detail("APOP", "EVP_DigestUpdate"));
+        if (EVP_DigestFinal_ex(ctx.get(), digest.data(), &digest_len) != 1)
+            return fail<std::string>(map_pop3_error(error_kind::invalid_state),
+                "MD5 finalization failure.",
+                make_pop3_detail("APOP", "EVP_DigestFinal_ex"));
 
         static constexpr char hex[] = "0123456789abcdef";
         std::string out;
-        out.reserve(MD5_DIGEST_LENGTH * 2);
-        for (unsigned char byte : digest)
+        out.reserve(static_cast<std::size_t>(digest_len) * 2);
+        for (unsigned int i = 0; i < digest_len; ++i)
         {
+            const unsigned char byte = digest[i];
             out.push_back(hex[byte >> 4]);
             out.push_back(hex[byte & 0x0F]);
         }
-        return out;
+        return ok(std::move(out));
     }
 
     awaitable<result_void> reconnect_with_snapshot(const session_snapshot& snapshot)
@@ -928,7 +951,8 @@ private:
 
         std::string challenge;
         MAILXX_CO_TRY_ASSIGN(challenge, extract_apop_challenge(last_greeting_line_));
-        const std::string digest = md5_hex(challenge + password);
+        std::string digest;
+        MAILXX_CO_TRY_ASSIGN(digest, md5_hex(challenge + password));
 
         std::string cmd;
         mailxx::detail::append_sv(cmd, "APOP ");
@@ -1279,9 +1303,21 @@ private:
         }
     }
 
-    awaitable<result_void> send_command(const std::string& command)
+    template<mailxx::net::detail::line_input Line>
+    awaitable<result_void> send_command(Line&& command)
     {
-        co_return co_await dlg_.write_line_r(command);
+        const std::string_view command_view(command);
+        co_return co_await dlg_.write_line_view_r(command_view);
+    }
+
+    template<typename String>
+        requires std::same_as<std::remove_cvref_t<String>, std::string>
+              && (!std::is_lvalue_reference_v<String&&>)
+    awaitable<result_void> send_command(String&& command)
+    {
+        std::string owned(std::forward<String>(command));
+        std::string_view command_view(owned);
+        co_return co_await dlg_.write_line_view_r(command_view);
     }
 
     awaitable<result<std::string>> read_ok_response(

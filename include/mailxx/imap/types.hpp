@@ -293,6 +293,7 @@ struct response
 struct options
 {
     std::size_t max_line_length = mailxx::net::DEFAULT_MAX_LINE_LENGTH;
+    std::size_t max_literal_size = 64u * 1024u * 1024u;
     std::optional<std::chrono::steady_clock::duration> timeout = std::nullopt;
     std::string default_sni;
     bool auto_starttls = false;

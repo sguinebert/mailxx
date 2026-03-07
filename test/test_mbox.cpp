@@ -22,7 +22,7 @@ using mailxx::storage::from_line_metadata;
 BOOST_AUTO_TEST_CASE(mbox_roundtrip_two_messages)
 {
     std::string msg1 = "From: a@example.com\r\n\r\nHello\r\nFrom line\r\n";
-    std::string msg2 = "From: b@example.com\r\n\r\nSecond\r\n>From preserved\r\n";
+    std::string msg2 = "From: b@example.com\r\n\r\nSecond\r\n>From preserved\r\n>>From twice\r\n";
 
     std::stringstream ss;
     mbox_writer writer(ss);
@@ -39,5 +39,5 @@ BOOST_AUTO_TEST_CASE(mbox_roundtrip_two_messages)
     BOOST_CHECK(!m3.has_value());
 
     BOOST_CHECK_EQUAL(*m1, "From: a@example.com\n\nHello\nFrom line\n");
-    BOOST_CHECK_EQUAL(*m2, "From: b@example.com\n\nSecond\nFrom preserved\n");
+    BOOST_CHECK_EQUAL(*m2, "From: b@example.com\n\nSecond\n>From preserved\n>>From twice\n");
 }

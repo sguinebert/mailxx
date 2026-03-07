@@ -101,19 +101,17 @@ public:
     template<typename MutableBufferSequence, typename CompletionToken>
     auto async_read_some(const MutableBufferSequence& buffers, CompletionToken&& token)
     {
-        return std::visit([&](auto& stream) -> decltype(auto)
-        {
-            return stream.async_read_some(buffers, std::forward<CompletionToken>(token));
-        }, stream_);
+        if (auto* plain = std::get_if<tcp::socket>(&stream_))
+            return plain->async_read_some(buffers, std::forward<CompletionToken>(token));
+        return std::get<ssl_stream>(stream_).async_read_some(buffers, std::forward<CompletionToken>(token));
     }
 
     template<typename ConstBufferSequence, typename CompletionToken>
     auto async_write_some(const ConstBufferSequence& buffers, CompletionToken&& token)
     {
-        return std::visit([&](auto& stream) -> decltype(auto)
-        {
-            return stream.async_write_some(buffers, std::forward<CompletionToken>(token));
-        }, stream_);
+        if (auto* plain = std::get_if<tcp::socket>(&stream_))
+            return plain->async_write_some(buffers, std::forward<CompletionToken>(token));
+        return std::get<ssl_stream>(stream_).async_write_some(buffers, std::forward<CompletionToken>(token));
     }
 
     awaitable<mailxx::result<void>> start_tls(ssl::context& context, std::string sni)

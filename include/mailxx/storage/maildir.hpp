@@ -10,6 +10,7 @@ Simple Maildir accessors (POSIX/Windows) without external dependencies.
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <random>
 #include <set>
@@ -83,7 +84,7 @@ public:
     {
         auto clean = normalize_flags(flags);
         auto base = e.path.filename().string();
-        auto dest_name = base + ":2," + clean;
+        auto dest_name = base + std::string(info_separator()) + clean;
         auto dest_path = cur_dir_ / dest_name;
         std::filesystem::rename(e.path, dest_path);
         return {dest_path, dest_name, clean};
@@ -93,7 +94,7 @@ public:
     {
         auto clean = normalize_flags(flags);
         auto base = base_name(e.path.filename().string());
-        auto dest_name = base + ":2," + clean;
+        auto dest_name = base + std::string(info_separator()) + clean;
         auto dest_path = cur_dir_ / dest_name;
         if (dest_path == e.path)
             return {dest_path, dest_name, clean};
@@ -102,6 +103,23 @@ public:
     }
 
 private:
+    static constexpr std::string_view info_separator() noexcept
+    {
+#if defined(_WIN32)
+        return ";2,";
+#else
+        return ":2,";
+#endif
+    }
+
+    static std::size_t find_info_separator(const std::string& filename)
+    {
+        auto pos = filename.find(":2,");
+        if (pos != std::string::npos)
+            return pos;
+        return filename.find(";2,");
+    }
+
     static std::string normalize_flags(std::string_view flags)
     {
         static const std::set<char> allowed = {'D', 'F', 'P', 'R', 'S', 'T'};
@@ -118,7 +136,7 @@ private:
 
     static std::string base_name(const std::string& filename)
     {
-        auto pos = filename.find(":2,");
+        auto pos = find_info_separator(filename);
         if (pos == std::string::npos)
             return filename;
         return filename.substr(0, pos);
@@ -126,7 +144,7 @@ private:
 
     static std::string parse_flags(const std::string& filename)
     {
-        auto pos = filename.find(":2,");
+        auto pos = find_info_separator(filename);
         if (pos == std::string::npos)
             return {};
         return filename.substr(pos + 3);
@@ -150,12 +168,15 @@ private:
 
     static std::string unique_name()
     {
-        static std::mt19937_64 rng(std::random_device{}());
-        static std::atomic<uint64_t> counter{0};
+        thread_local std::mt19937_64 rng([] {
+            std::random_device rd;
+            return (static_cast<std::uint64_t>(rd()) << 32) ^ static_cast<std::uint64_t>(rd());
+        }());
+        static std::atomic<std::uint64_t> counter{0};
         auto now = std::chrono::steady_clock::now().time_since_epoch();
         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-        uint64_t rnd = rng();
-        uint64_t cnt = ++counter;
+        std::uint64_t rnd = rng();
+        std::uint64_t cnt = ++counter;
         return std::to_string(ns) + "." + std::to_string(rnd) + "." + std::to_string(cnt);
     }
 

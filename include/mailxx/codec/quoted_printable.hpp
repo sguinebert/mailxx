@@ -86,7 +86,8 @@ public:
 
         for (auto ch = text.begin(); ch != text.end(); ch++)
         {
-            if (*ch > SPACE_CHAR && *ch <= TILDE_CHAR && *ch != EQUAL_CHAR && *ch != QUESTION_MARK_CHAR)
+            if (*ch > SPACE_CHAR && *ch <= TILDE_CHAR && *ch != EQUAL_CHAR && *ch != QUESTION_MARK_CHAR &&
+                (!q_codec_mode_ || *ch != UNDERSCORE_CHAR))
             {
                 // Add soft break when not q encoding.
                 if (line_len >= policy - 3)

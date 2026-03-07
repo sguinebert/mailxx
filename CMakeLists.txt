@@ -53,6 +53,7 @@ option(mailxx_BUILD_EXAMPLES "Turn on to build examples." ON)
 option(mailxx_BUILD_TESTS "Turn on to build the tests." ON)
 option(mailxx_DYN_LINK_TESTS "Turn on to dynamically link the tests." OFF)
 option(mailxx_BUILD_MODULES "Turn on to build C++20 modules (EXPERIMENTAL, requires CMake 3.28+)." OFF)
+option(mailxx_BUILD_REALWORLD_CLI "Turn on to build the CLI11-based real-world validation tool." OFF)
 
 option(BUILD_SHARED_LIBS "Turn on to build mailxx as a shared library. When off mailxx is build as a static library." ON)
 
@@ -266,6 +267,10 @@ if(${mailxx_BUILD_TESTS})
     file(GLOB TXTS "${PROJECT_SOURCE_DIR}/test/cv.txt")
     install(FILES ${TXTS} DESTINATION "${SHARE_INSTALL_DIR}/${PROJECT_NAME}/test/")
 endif(${mailxx_BUILD_TESTS})
+
+if(${mailxx_BUILD_REALWORLD_CLI})
+    add_subdirectory(tools)
+endif(${mailxx_BUILD_REALWORLD_CLI})
 
 # optionally build C++20 modules (EXPERIMENTAL)
 if(${mailxx_BUILD_MODULES})

@@ -1304,7 +1304,7 @@ private:
 
         append_smtp_data_terminator(info.data);
         trace_payload("DATA", info.data.size());
-        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(info.data)));
+        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(std::move(info.data)));
 
         rep_res = co_await read_reply_impl("DATA");
         if (!rep_res)
@@ -1429,7 +1429,7 @@ private:
         while (queue.pop(chunk))
         {
             trace_payload("DATA", chunk.size());
-            auto write_res = co_await dialog().write_raw_r(buffer(chunk));
+            auto write_res = co_await dialog().write_raw_r(std::move(chunk));
             if (!write_res)
             {
                 queue.set_done();
@@ -1444,7 +1444,8 @@ private:
             co_return fail<reply>(errc::smtp_invalid_state, "mime format error", queue.error_msg());
 
         std::string terminator = ends_with_crlf ? ".\r\n" : "\r\n.\r\n";
-        auto write_res = co_await dialog().write_raw_r(buffer(terminator));
+        const std::string_view terminator_view(terminator);
+        auto write_res = co_await dialog().write_raw_view_r(terminator_view);
         if (!write_res)
             co_return mailxx::fail<reply>(std::move(write_res).error());
 
@@ -1624,7 +1625,7 @@ private:
 
         append_smtp_data_terminator(info.data);
         trace_payload("DATA", info.data.size());
-        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(info.data)));
+        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(std::move(info.data)));
 
         rep_res = co_await read_reply_impl("DATA");
         if (!rep_res)
@@ -1840,7 +1841,7 @@ private:
 
         data += "\r\n.\r\n";
         trace_payload("DATA", data.size());
-        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(data)));
+        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(std::move(data)));
 
         rep_res = co_await read_reply_impl("DATA");
         if (!rep_res)
@@ -1940,7 +1941,8 @@ private:
         for (size_t offset = 0; offset < info.data.size(); offset += chunk_size)
         {
             size_t len = std::min(chunk_size, info.data.size() - offset);
-            MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(info.data.data() + offset, len)));
+            const std::string_view chunk_view(info.data.data() + offset, len);
+            MAILXX_TRY_CO_AWAIT(dialog().write_raw_view_r(chunk_view));
             
             bytes_sent += len;
             
@@ -2015,8 +2017,9 @@ private:
         mailxx::detail::append_sv(cmd, "MAIL FROM: ");
         mailxx::detail::append_angle_addr(cmd, mail_from);
         append_mail_extensions(cmd, info);
-        MAILXX_TRY_CO_AWAIT(dialog().write_line_r(cmd));
         std::string mail_command = cmd;
+        std::string_view cmd_view(cmd);
+        MAILXX_TRY_CO_AWAIT(dialog().write_line_view_r(cmd_view));
 
         // Send all RCPT TO commands without waiting for responses
         std::vector<std::string> rcpt_commands;
@@ -2030,7 +2033,8 @@ private:
             mailxx::detail::append_sv(cmd, "RCPT TO: ");
             mailxx::detail::append_angle_addr(cmd, rcpt);
             rcpt_commands.push_back(cmd);
-            MAILXX_TRY_CO_AWAIT(dialog().write_line_r(cmd));
+            std::string_view cmd_view(cmd);
+            MAILXX_TRY_CO_AWAIT(dialog().write_line_view_r(cmd_view));
         }
 
         // ========== PIPELINING: Now read all responses ==========
@@ -2087,7 +2091,7 @@ private:
         // Format and send message body
         append_smtp_data_terminator(info.data);
         trace_payload("DATA", info.data.size());
-        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(buffer(info.data)));
+        MAILXX_TRY_CO_AWAIT(dialog().write_raw_r(std::move(info.data)));
 
         rep_res = co_await read_reply_impl("DATA");
         if (!rep_res)
@@ -2102,7 +2106,9 @@ private:
     awaitable<mailxx::result<reply>> command_impl(std::string_view line)
     {
         std::string command(line);
-        MAILXX_TRY_CO_AWAIT(dialog().write_line_r(command));
+        std::string payload = command;
+        std::string_view payload_view(payload);
+        MAILXX_TRY_CO_AWAIT(dialog().write_line_view_r(payload_view));
         co_return co_await read_reply_impl(command);
     }
 

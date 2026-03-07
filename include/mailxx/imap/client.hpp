@@ -13,6 +13,7 @@ copy at https://opensource.org/licenses/MIT.
 
 #pragma once
 
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -128,7 +129,9 @@ public:
             client* owner = owner_;
             dialog_type* dlg = nullptr;
             MAILXX_CO_TRY_ASSIGN(dlg, owner_->dialog_ptr());
-            MAILXX_TRY_CO_AWAIT(dlg->write_line_r("DONE"));
+            std::string done = "DONE";
+            std::string_view done_view(done);
+            MAILXX_TRY_CO_AWAIT(dlg->write_line_view_r(done_view));
 
             response resp;
             resp.tag = tag_;
@@ -138,24 +141,7 @@ public:
                 std::string line;
                 MAILXX_CO_TRY_ASSIGN(line, co_await dlg->read_line_r());
                 client::handle_line(resp, line, tag_);
-
-                std::size_t literal_size = 0;
-                if (client::extract_literal_size(line, literal_size))
-                {
-                    std::string literal;
-                    MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_size));
-                    if (literal.size() != literal_size)
-                    {
-                        co_return owner_->imap_fail<response>(
-                            error_kind::parse,
-                            "IMAP literal size mismatch.",
-                            tag_,
-                            "DONE",
-                            line,
-                            resp);
-                    }
-                    resp.literals.push_back(std::move(literal));
-                }
+                MAILXX_TRY_CO_AWAIT(owner_->read_literal_if_present(*dlg, resp, line, tag_, "DONE"));
 
                 if (client::is_tagged_line(line, tag_))
                     break;
@@ -573,7 +559,8 @@ public:
 
         dialog_type* dlg = nullptr;
         MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
-        MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
+        std::string_view line_view(line);
+        MAILXX_TRY_CO_AWAIT(dlg->write_line_view_r(line_view));
 
         std::string reply_line;
         MAILXX_CO_TRY_ASSIGN(reply_line, co_await dlg->read_line_r());
@@ -822,23 +809,7 @@ private:
         MAILXX_CO_TRY_ASSIGN(line, co_await dlg->read_line_r());
         handle_line(resp, line, std::string_view{});
         update_literal_plus_from_line(line);
-        std::size_t literal_size = 0;
-        if (extract_literal_size(line, literal_size))
-        {
-            std::string literal;
-            MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_size));
-            if (literal.size() != literal_size)
-            {
-                co_return imap_fail<response>(
-                    error_kind::parse,
-                    "IMAP literal size mismatch.",
-                    resp.tag,
-                    "GREETING",
-                    line,
-                    resp);
-            }
-            resp.literals.push_back(std::move(literal));
-        }
+        MAILXX_TRY_CO_AWAIT(read_literal_if_present(*dlg, resp, line, resp.tag, "GREETING"));
         co_return finalize_response(std::move(resp), "GREETING");
     }
 
@@ -1004,7 +975,8 @@ private:
 
         dialog_type* dlg = nullptr;
         MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
-        MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
+        std::string_view line_view(line);
+        MAILXX_TRY_CO_AWAIT(dlg->write_line_view_r(line_view));
         response resp;
         MAILXX_CO_TRY_ASSIGN(resp, co_await read_response_impl(*dlg, tag, cmd));
         co_return finalize_response(std::move(resp), cmd);
@@ -1052,7 +1024,8 @@ private:
 
         dialog_type* dlg = nullptr;
         MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
-        MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
+        std::string_view line_view(line);
+        MAILXX_TRY_CO_AWAIT(dlg->write_line_view_r(line_view));
 
         response resp;
         resp.tag = tag;
@@ -1063,29 +1036,14 @@ private:
             std::string resp_line;
             MAILXX_CO_TRY_ASSIGN(resp_line, co_await dlg->read_line_r());
             handle_line(resp, resp_line, tag);
-
-            std::size_t literal_size = 0;
-            if (extract_literal_size(resp_line, literal_size))
-            {
-                std::string literal;
-                MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_size));
-                if (literal.size() != literal_size)
-                {
-                    co_return imap_fail<response>(
-                        error_kind::parse,
-                        "IMAP literal size mismatch.",
-                        tag,
-                        cmd,
-                        resp_line,
-                        resp);
-                }
-                resp.literals.push_back(std::move(literal));
-            }
+            MAILXX_TRY_CO_AWAIT(read_literal_if_present(*dlg, resp, resp_line, tag, cmd));
 
             if (!continuation_sent && !resp_line.empty() && resp_line[0] == '+')
             {
                 continuation_sent = true;
-                MAILXX_TRY_CO_AWAIT(dlg->write_line_r(continuation_line));
+                std::string continuation_payload(continuation_line);
+                std::string_view continuation_view(continuation_payload);
+                MAILXX_TRY_CO_AWAIT(dlg->write_line_view_r(continuation_view));
             }
 
             if (is_tagged_line(resp_line, tag))
@@ -1151,7 +1109,8 @@ private:
 
         dialog_type* dlg = nullptr;
         MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
-        MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
+        std::string_view line_view(line);
+        MAILXX_TRY_CO_AWAIT(dlg->write_line_view_r(line_view));
 
         response resp;
         resp.tag = tag;
@@ -1164,23 +1123,7 @@ private:
                 std::string resp_line;
                 MAILXX_CO_TRY_ASSIGN(resp_line, co_await dlg->read_line_r());
                 handle_line(resp, resp_line, tag);
-                std::size_t literal_size = 0;
-                if (extract_literal_size(resp_line, literal_size))
-                {
-                    std::string literal;
-                    MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_size));
-                    if (literal.size() != literal_size)
-                    {
-                        co_return imap_fail<response>(
-                            error_kind::parse,
-                            "IMAP literal size mismatch.",
-                            tag,
-                            cmd,
-                            resp_line,
-                            resp);
-                    }
-                    resp.literals.push_back(std::move(literal));
-                }
+                MAILXX_TRY_CO_AWAIT(read_literal_if_present(*dlg, resp, resp_line, tag, cmd));
 
                 if (!resp_line.empty() && resp_line[0] == '+')
                 {
@@ -1243,7 +1186,8 @@ private:
         }
 
         trace_payload("APPEND", data.size());
-        MAILXX_TRY_CO_AWAIT(dlg->write_raw_r(buffer(data.data(), data.size())));
+        std::string payload(data);
+        MAILXX_TRY_CO_AWAIT(dlg->write_raw_r(std::move(payload)));
         MAILXX_TRY_CO_AWAIT(read_response_until_tag(*dlg, resp, tag, cmd));
         co_return finalize_response(std::move(resp), cmd);
     }
@@ -1389,7 +1333,8 @@ private:
 
         dialog_type* dlg = nullptr;
         MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
-        MAILXX_TRY_CO_AWAIT(dlg->write_line_r(line));
+        std::string_view line_view(line);
+        MAILXX_TRY_CO_AWAIT(dlg->write_line_view_r(line_view));
 
         response resp;
         resp.tag = tag;
@@ -1433,7 +1378,7 @@ private:
         std::string chunk;
         while (queue.pop(chunk))
         {
-            auto write_res = co_await dlg->write_raw_r(buffer(chunk));
+            auto write_res = co_await dlg->write_raw_r(std::move(chunk));
             if (!write_res)
             {
                 queue.set_done();
@@ -1454,23 +1399,7 @@ private:
             MAILXX_CO_TRY_ASSIGN(resp_line, co_await dlg->read_line_r());
             handle_line(resp, resp_line, tag);
             update_literal_plus_from_line(resp_line);
-            std::size_t literal_resp = 0;
-            if (extract_literal_size(resp_line, literal_resp))
-            {
-                std::string literal;
-                MAILXX_CO_TRY_ASSIGN(literal, co_await dlg->read_exactly_r(literal_resp));
-                if (literal.size() != literal_resp)
-                {
-                    co_return imap_fail<response>(
-                        error_kind::parse,
-                        "IMAP literal size mismatch.",
-                        tag,
-                        cmd,
-                        resp_line,
-                        resp);
-                }
-                resp.literals.push_back(std::move(literal));
-            }
+            MAILXX_TRY_CO_AWAIT(read_literal_if_present(*dlg, resp, resp_line, tag, cmd));
             if (is_tagged_line(resp_line, tag))
                 break;
         }
@@ -1495,24 +1424,7 @@ private:
             std::string line;
             MAILXX_CO_TRY_ASSIGN(line, co_await dlg.read_line_r());
             handle_line(resp, line, tag);
-
-            std::size_t literal_size = 0;
-            if (extract_literal_size(line, literal_size))
-            {
-                std::string literal;
-                MAILXX_CO_TRY_ASSIGN(literal, co_await dlg.read_exactly_r(literal_size));
-                if (literal.size() != literal_size)
-                {
-                    co_return imap_fail<void>(
-                        error_kind::parse,
-                        "IMAP literal size mismatch.",
-                        tag,
-                        command,
-                        line,
-                        resp);
-                }
-                resp.literals.push_back(std::move(literal));
-            }
+            MAILXX_TRY_CO_AWAIT(read_literal_if_present(dlg, resp, line, tag, command));
 
             if (is_tagged_line(line, tag))
                 break;
@@ -1520,34 +1432,98 @@ private:
         co_return mailxx::ok();
     }
 
-    static bool extract_literal_size(std::string_view line, std::size_t& out)
+    enum class literal_suffix_state
+    {
+        none,
+        ok,
+        overflow
+    };
+
+    struct literal_suffix
+    {
+        literal_suffix_state state = literal_suffix_state::none;
+        std::size_t size = 0;
+    };
+
+    [[nodiscard]] awaitable<result_void> read_literal_if_present(dialog_type& dlg, response& resp,
+        std::string_view line, std::string_view tag, std::string_view command)
+    {
+        const literal_suffix parsed = parse_literal_suffix(line);
+        if (parsed.state == literal_suffix_state::none)
+            co_return mailxx::ok();
+
+        if (parsed.state == literal_suffix_state::overflow)
+        {
+            co_return imap_fail<void>(
+                error_kind::parse,
+                "IMAP literal size overflow.",
+                tag,
+                command,
+                line,
+                resp);
+        }
+
+        if (parsed.size > options_.max_literal_size)
+        {
+            auto detail = imap_detail(tag, command, line, resp.untagged_lines.size(), resp.literals.size());
+            detail.add_int("literal_size", static_cast<std::uint64_t>(parsed.size));
+            detail.add_int("max_literal_size", static_cast<std::uint64_t>(options_.max_literal_size));
+            co_return mailxx::fail_void(
+                map_imap_error(error_kind::parse),
+                "IMAP literal exceeds configured limit.",
+                std::move(detail));
+        }
+
+        std::string literal;
+        MAILXX_CO_TRY_ASSIGN(literal, co_await dlg.read_exactly_r(parsed.size));
+        if (literal.size() != parsed.size)
+        {
+            co_return imap_fail<void>(
+                error_kind::parse,
+                "IMAP literal size mismatch.",
+                tag,
+                command,
+                line,
+                resp);
+        }
+
+        resp.literals.push_back(std::move(literal));
+        co_return mailxx::ok();
+    }
+
+    static literal_suffix parse_literal_suffix(std::string_view line)
     {
         if (line.size() < 3 || line.back() != '}')
-            return false;
+            return {};
 
         const auto brace = line.rfind('{');
         if (brace == std::string_view::npos)
-            return false;
+            return {};
 
         std::string_view inner = line.substr(brace + 1, line.size() - brace - 2);
         if (inner.empty())
-            return false;
+            return {};
 
         if (inner.back() == '+')
             inner.remove_suffix(1);
         if (inner.empty())
-            return false;
+            return {};
 
-        std::size_t value = 0;
         for (char ch : inner)
         {
             if (ch < '0' || ch > '9')
-                return false;
-            value = value * 10 + static_cast<std::size_t>(ch - '0');
+                return {};
         }
 
-        out = value;
-        return true;
+        std::size_t value = 0;
+        const auto [ptr, ec] = std::from_chars(inner.data(), inner.data() + inner.size(), value);
+        if (ptr != inner.data() + inner.size())
+            return {};
+        if (ec == std::errc::result_out_of_range)
+            return {literal_suffix_state::overflow, 0};
+        if (ec != std::errc{})
+            return {};
+        return {literal_suffix_state::ok, value};
     }
 
     static bool is_tagged_line(std::string_view line, std::string_view tag)
@@ -1861,9 +1837,8 @@ private:
         std::size_t literal_index = 0;
         for (const auto& line : resp.untagged_lines)
         {
-            std::size_t literal_size = 0;
-            const bool has_literal = extract_literal_size(line, literal_size);
-            if (!has_literal)
+            const literal_suffix literal = parse_literal_suffix(line);
+            if (literal.state != literal_suffix_state::ok)
                 continue;
 
             std::string upper_line = to_upper_ascii(line);

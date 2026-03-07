@@ -40,6 +40,11 @@ BOOST_AUTO_TEST_CASE(maildir_basic_flow)
     auto cur_list = md.list_cur();
     BOOST_CHECK_EQUAL(cur_list.size(), 1u);
     BOOST_CHECK_EQUAL(cur_list.front().flags, "RS");
+#if defined(_WIN32)
+    BOOST_CHECK(cur_list.front().name.find(";2,RS") != std::string::npos);
+#else
+    BOOST_CHECK(cur_list.front().name.find(":2,RS") != std::string::npos);
+#endif
 
     auto read_back = md.read_message(cur_list.front());
     BOOST_CHECK_EQUAL(read_back, payload);
@@ -49,6 +54,11 @@ BOOST_AUTO_TEST_CASE(maildir_basic_flow)
     auto cur_list2 = md.list_cur();
     BOOST_CHECK_EQUAL(cur_list2.size(), 1u);
     BOOST_CHECK_EQUAL(cur_list2.front().flags, "FT");
+#if defined(_WIN32)
+    BOOST_CHECK(cur_list2.front().name.find(";2,FT") != std::string::npos);
+#else
+    BOOST_CHECK(cur_list2.front().name.find(":2,FT") != std::string::npos);
+#endif
 
     std::filesystem::remove_all(tmp);
 }

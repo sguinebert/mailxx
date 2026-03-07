@@ -193,7 +193,7 @@ inline const std::string mime::CONTENT_HEADER_VALUE_ALPHABET{"!#$%&*+-./^_`|~"};
 
 
 inline mime::mime() : version_("1.0"), line_policy_(codec::line_len_policy_t::MANDATORY),
-    strict_mode_(false), strict_codec_mode_(false), header_codec_(header_codec_t::UTF8), content_type_(media_type_t::NONE, ""),
+    strict_mode_(false), strict_codec_mode_(false), content_type_(media_type_t::NONE, ""),
     encoding_(content_transfer_encoding_t::NONE), disposition_(content_disposition_t::NONE), parsing_header_(true),
     mime_status_(mime_parsing_status_t::NONE)
 {
@@ -308,6 +308,7 @@ inline result_void mime::parse_by_line(const std::string& line, bool dot_escape)
                         MAILXX_TRY(parts_.back().parse_by_line(codec::END_OF_LINE));
                     mime m;
                     m.line_policy(line_policy_);
+                    m.strict_mode(strict_mode_);
                     m.strict_codec_mode(strict_codec_mode_);
                     parts_.push_back(m);
                 }
@@ -453,12 +454,6 @@ inline std::vector<mime> mime::parts() const
 }
 
 
-inline void mime::line_policy(codec::line_len_policy_t encoder_line_policy, codec::line_len_policy_t /*decoder_line_policy*/)
-{
-    line_policy_ = encoder_line_policy;
-}
-
-
 inline void mime::line_policy(codec::line_len_policy_t line_policy)
 {
     line_policy_ = line_policy;
@@ -492,18 +487,6 @@ inline void mime::strict_codec_mode(bool mode)
 inline bool mime::strict_codec_mode() const
 {
     return strict_codec_mode_;
-}
-
-
-inline void mime::header_codec(header_codec_t hdr_codec)
-{
-    header_codec_ = hdr_codec;
-}
-
-
-inline mime::header_codec_t mime::header_codec() const
-{
-    return header_codec_;
 }
 
 
@@ -1101,15 +1084,13 @@ inline result_void mime::parse_header_value_attributes(const std::string& header
                 break;
 
             case state_t::ATTR_BEGIN:
-                if (isspace(*ch))
+                if (std::isspace(static_cast<unsigned char>(*ch)))
                     ;
                 else if (isalpha(*ch) || isdigit(*ch) || CONTENT_ATTR_ALPHABET.find(*ch) != std::string::npos)
                 {
                     state = state_t::ATTR_NAME;
                     attribute_name += *ch;
                 }
-                else if (*ch == NAME_VALUE_SEPARATOR_CHAR)
-                    state = state_t::ATTR_SEP;
                 else
                     return fail_void(errc::mime_parse_error, "Parsing attribute name error.",
                         "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
@@ -1119,21 +1100,29 @@ inline result_void mime::parse_header_value_attributes(const std::string& header
             case state_t::ATTR_NAME:
                 if (isalpha(*ch) || isdigit(*ch) || CONTENT_ATTR_ALPHABET.find(*ch) != std::string::npos)
                     attribute_name += *ch;
-                else if (isspace(*ch) && !strict_mode_)
+                else if (std::isspace(static_cast<unsigned char>(*ch)) && !strict_mode_)
                     state = state_t::PRE_EQUAL;
                 else if (*ch == NAME_VALUE_SEPARATOR_CHAR)
                     state = state_t::ATTR_SEP;
+                else
+                    return fail_void(errc::mime_parse_error, "Parsing attribute name error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
+                        + ".\nHeader is `" + header + "`.");
                 break;
 
             case state_t::PRE_EQUAL:
-                if (isspace(*ch) && !strict_mode_)
+                if (std::isspace(static_cast<unsigned char>(*ch)) && !strict_mode_)
                     ;
                 else if (*ch == NAME_VALUE_SEPARATOR_CHAR)
                     state = state_t::ATTR_SEP;
+                else
+                    return fail_void(errc::mime_parse_error, "Parsing attribute name error.",
+                        "Syntax error at character `" + std::string(1, *ch) + "`, at position " + std::to_string(char_pos)
+                        + ".\nHeader is `" + header + "`.");
                 break;
 
             case state_t::ATTR_SEP:
-                if (isspace(*ch) && !strict_mode_)
+                if (std::isspace(static_cast<unsigned char>(*ch)) && !strict_mode_)
                     state = state_t::POST_EQUAL;
                 else if (*ch == codec::QUOTE_CHAR)
                     state = state_t::QATTR_VALUE_BEGIN;
@@ -1149,7 +1138,7 @@ inline result_void mime::parse_header_value_attributes(const std::string& header
                 break;
 
             case state_t::POST_EQUAL:
-                if (isspace(*ch) && !strict_mode_)
+                if (std::isspace(static_cast<unsigned char>(*ch)) && !strict_mode_)
                     ;
                 else if (*ch == codec::QUOTE_CHAR)
                     state = state_t::QATTR_VALUE_BEGIN;
@@ -1186,7 +1175,7 @@ inline result_void mime::parse_header_value_attributes(const std::string& header
                     attribute_value += *ch;
                 else if (!strict_mode_ && *ch == codec::BACKSLASH_CHAR)
                     attribute_value += *ch;
-                else if (isspace(*ch))
+                else if (std::isspace(static_cast<unsigned char>(*ch)))
                     state = state_t::ATTR_VALUE_END;
                 else if (*ch == ATTRIBUTES_SEPARATOR_CHAR)
                 {
@@ -1211,7 +1200,7 @@ inline result_void mime::parse_header_value_attributes(const std::string& header
                 attribute_name.clear();
                 attribute_value.clear();
 
-                if (isspace(*ch))
+                if (std::isspace(static_cast<unsigned char>(*ch)))
                     ;
                 else if (*ch == ATTRIBUTES_SEPARATOR_CHAR)
                     state = state_t::ATTR_BEGIN;
