@@ -30,6 +30,7 @@ copy at https://opensource.org/licenses/MIT.
 #include <boost/algorithm/string/case_conv.hpp>
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/codec/base64_stream.hpp>
+#include <mailxx/detail/ascii.hpp>
 #include <mailxx/detail/regex.hpp>
 #include <mailxx/detail/result.hpp>
 #include <mailxx/detail/output_sink.hpp>
@@ -550,6 +551,36 @@ protected:
     **/
     using headers_t = std::multimap<std::string, std::string, icase_comp_t>;
 
+public:
+
+    /**
+    Adding another header.
+
+    Adding a header defined by other methods leads to the undefined behaviour.
+
+    @param name  Header name.
+    @param value Header value.
+    **/
+    result_void add_header(const std::string& name, const std::string& value);
+
+    /**
+    Removing another header.
+
+    Removing a header defined by other methods leads to the undefined behaviour.
+
+    @param name Header to remove.
+    **/
+    void remove_header(const std::string& name);
+
+    /**
+    Returning the other headers.
+
+    @return Mime headers.
+    **/
+    const headers_t& headers() const;
+
+protected:
+
     /**
     Content type header name.
     **/
@@ -945,6 +976,11 @@ protected:
     Content disposition of the mime part.
     **/
     content_disposition_t disposition_;
+
+    /**
+    Other mime headers.
+    **/
+    headers_t custom_headers_;
 
     /**
     Raw representation of the content.

@@ -454,6 +454,30 @@ inline std::vector<mime> mime::parts() const
 }
 
 
+inline result_void mime::add_header(const std::string& name, const std::string& value)
+{
+    if (!detail::is_valid_header_name(name))
+        return fail_void(errc::mime_parse_error, "Header name format error.", "Name is `" + name + "`.");
+    if (!detail::is_valid_header_value(value))
+        return fail_void(errc::mime_parse_error, "Header value Format error.", "Value is `" + value + "`.");
+
+    custom_headers_.insert(std::make_pair(name, value));
+    return ok();
+}
+
+
+inline void mime::remove_header(const std::string& name)
+{
+    custom_headers_.erase(name);
+}
+
+
+inline const mime::headers_t& mime::headers() const
+{
+    return custom_headers_;
+}
+
+
 inline void mime::line_policy(codec::line_len_policy_t line_policy)
 {
     line_policy_ = line_policy;
@@ -560,7 +584,23 @@ inline result<std::string> mime::format_header() const
     MAILXX_TRY_ASSIGN(cd, format_content_disposition());
     std::string cid;
     MAILXX_TRY_ASSIGN(cid, format_content_id());
-    return ok(ct + te + cd + cid);
+    std::string header = ct + te + cd + cid;
+
+    for (const auto& hdr : custom_headers_)
+    {
+        std::string::size_type l1p = static_cast<std::string::size_type>(line_policy_) - hdr.first.length() - HEADER_SEPARATOR_STR.length();
+        bit7 b7(l1p, static_cast<std::string::size_type>(line_policy_));
+        auto hdr_enc = b7.encode(hdr.second);
+        if (!hdr_enc)
+            return fail<std::string>(errc::mime_parse_error, "mime format error", detail::codec_error_message(hdr_enc.error()));
+        if (hdr_enc->empty())
+            return fail<std::string>(errc::mime_parse_error, "Header value format error.", "Header is `" + hdr.first + "`.");
+
+        header += hdr.first + HEADER_SEPARATOR_STR + hdr_enc->at(0) + codec::END_OF_LINE;
+        header += fold_header_line(*hdr_enc);
+    }
+
+    return ok(std::move(header));
 }
 
 
@@ -883,6 +923,10 @@ inline result_void mime::parse_header_line(const std::string& header_line)
         MAILXX_TRY_ASSIGN(ids, parse_many_ids(header_value));
         if (!ids.empty())
             content_id_ = ids[0];
+    }
+    else
+    {
+        custom_headers_.insert(std::make_pair(header_name, header_value));
     }
 
     return ok();

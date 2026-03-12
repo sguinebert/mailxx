@@ -280,6 +280,74 @@ BOOST_AUTO_TEST_CASE(format_other_headers)
 }
 
 
+BOOST_AUTO_TEST_CASE(format_multipart_attachment_custom_header)
+{
+    message msg;
+    msg.from(mail_address("mailxx", "address@mailxx.dev"));
+    msg.add_recipient(mail_address("mailxx", "address@mailxx.dev"));
+    auto ldt = make_zoned_time(2014, 1, 17, 5, 39, 22, -7, -30);
+    msg.date_time(ldt);
+    msg.subject("format multipart attachment custom header");
+    msg.content_type(message::media_type_t::MULTIPART, "mixed");
+    msg.content_type().boundary("my_bound");
+
+    mime part;
+    BOOST_REQUIRE(part.content_type(mime::media_type_t::APPLICATION, "edi-consent"));
+    part.content_transfer_encoding(mime::content_transfer_encoding_t::BASE_64);
+    part.content_disposition(mime::content_disposition_t::ATTACHMENT);
+    part.name("SVF053");
+    BOOST_REQUIRE(part.add_header("Content-Description", "FSETEST/B2/K"));
+    part.content("payload");
+    msg.add_part(part);
+
+    string msg_str;
+    BOOST_REQUIRE(msg.format(msg_str));
+    BOOST_CHECK_MSG_EQ(msg_str, "From: mailxx <address@mailxx.dev>\r\n"
+        "To: mailxx <address@mailxx.dev>\r\n"
+        "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: multipart/mixed; boundary=\"my_bound\"\r\n"
+        "Subject: format multipart attachment custom header\r\n"
+        "\r\n"
+        "--my_bound\r\n"
+        "Content-Type: application/edi-consent; \r\n"
+        "  name=\"SVF053\"\r\n"
+        "Content-Transfer-Encoding: Base64\r\n"
+        "Content-Disposition: attachment; \r\n"
+        "  filename=\"SVF053\"\r\n"
+        "Content-Description: FSETEST/B2/K\r\n"
+        "\r\n"
+        "cGF5bG9hZA==\r\n"
+        "\r\n"
+        "--my_bound--\r\n");
+
+    auto first_boundary = msg_str.find("--my_bound\r\n");
+    BOOST_REQUIRE(first_boundary != string::npos);
+    BOOST_CHECK(msg_str.substr(0, first_boundary).find("Content-Description") == string::npos);
+}
+
+
+BOOST_AUTO_TEST_CASE(remove_mime_custom_header)
+{
+    mime part;
+    BOOST_REQUIRE(part.add_header("Content-Description", "FSETEST/B2/K"));
+    BOOST_CHECK(part.headers().size() == 1);
+
+    part.remove_header("Content-Description");
+    BOOST_CHECK(part.headers().empty());
+
+    BOOST_REQUIRE(part.content_type(mime::media_type_t::APPLICATION, "edi-consent"));
+    part.content_transfer_encoding(mime::content_transfer_encoding_t::BASE_64);
+    part.content_disposition(mime::content_disposition_t::ATTACHMENT);
+    part.name("SVF053");
+    part.content("payload");
+
+    string part_str;
+    BOOST_REQUIRE(part.format(part_str));
+    BOOST_CHECK(part_str.find("Content-Description") == string::npos);
+}
+
+
 /**
 Formatting multiline content with lines containing leading dots, with the escaping dot flag off.
 
@@ -2732,6 +2800,49 @@ BOOST_AUTO_TEST_CASE(parse_custom_header)
     BOOST_CHECK(msg.headers().size() == 2 && msg.headers().find("User-Agent")->second == "mailxx");
     msg.remove_header("User-Agent");
     BOOST_CHECK(msg.headers().size() == 1);
+}
+
+
+BOOST_AUTO_TEST_CASE(parse_multipart_attachment_custom_header)
+{
+    message msg;
+    msg.line_policy(codec::line_len_policy_t::MANDATORY);
+    string msg_str = "From: mailxx <address@mailxx.dev>\r\n"
+        "To: mailxx <address@mailxx.dev>\r\n"
+        "Date: Fri, 17 Jan 2014 05:39:22 -0730\r\n"
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: multipart/mixed; boundary=\"my_bound\"\r\n"
+        "Subject: parse multipart attachment custom header\r\n"
+        "\r\n"
+        "--my_bound\r\n"
+        "Content-Type: application/edi-consent; \r\n"
+        "  name=\"SVF053\"\r\n"
+        "Content-Transfer-Encoding: Base64\r\n"
+        "Content-Disposition: attachment; \r\n"
+        "  filename=\"SVF053\"\r\n"
+        "Content-Description: FSETEST/B2/K\r\n"
+        "\r\n"
+        "cGF5bG9hZA==\r\n"
+        "\r\n"
+        "--my_bound--\r\n";
+
+    BOOST_REQUIRE(msg.parse(msg_str));
+    BOOST_CHECK(msg.parts().size() == 1);
+    BOOST_CHECK(msg.headers().empty());
+
+    auto part_headers = msg.parts().at(0).headers();
+    BOOST_CHECK(part_headers.size() == 1);
+    auto content_description = part_headers.find("Content-Description");
+    BOOST_REQUIRE(content_description != part_headers.end());
+    BOOST_CHECK(content_description->second == "FSETEST/B2/K");
+
+    string reformatted;
+    BOOST_REQUIRE(msg.format(reformatted));
+
+    auto first_boundary = reformatted.find("--my_bound\r\n");
+    BOOST_REQUIRE(first_boundary != string::npos);
+    BOOST_CHECK(reformatted.substr(0, first_boundary).find("Content-Description") == string::npos);
+    BOOST_CHECK(reformatted.find("Content-Description: FSETEST/B2/K\r\n", first_boundary) != string::npos);
 }
 
 
