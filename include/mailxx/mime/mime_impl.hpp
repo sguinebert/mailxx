@@ -345,6 +345,7 @@ inline result_void mime::content_type(const content_type_t& cont_type)
 {
     if (cont_type.media_type() != media_type_t::NONE && cont_type.media_subtype().empty())
         return fail_void(errc::mime_parse_error, "Bad content type.", "Media type is none, subtype is `" + cont_type.media_subtype() + "`.");
+    content_type_literal_.clear();
     content_type_ = cont_type;
     return ok();
 }
@@ -362,6 +363,27 @@ inline result_void mime::content_type(media_type_t media_type, const std::string
 {
     content_type_t c(media_type, media_subtype, attributes, boost::algorithm::to_lower_copy(charset));
     return content_type(c);
+}
+
+
+inline result_void mime::content_type_literal(std::string value)
+{
+    if (value.empty() || value.find(CONTENT_SUBTYPE_SEPARATOR) == std::string::npos ||
+        value.find(ATTRIBUTES_SEPARATOR_CHAR) != std::string::npos)
+    {
+        return fail_void(errc::mime_parse_error, "Bad content type literal.", std::move(value));
+    }
+    if (!detail::is_valid_header_value(value))
+        return fail_void(errc::mime_parse_error, "Bad content type literal.", std::move(value));
+
+    content_type_literal_ = std::move(value);
+    return ok();
+}
+
+
+inline std::string mime::content_type_literal() const
+{
+    return content_type_literal_;
 }
 
 
@@ -680,10 +702,18 @@ inline result<std::string> mime::format_content_type() const
 {
     std::string line;
 
-    if (content_type_.media_type() != media_type_t::NONE)
+    if (!content_type_literal_.empty())
+    {
+        line += CONTENT_TYPE_HEADER + HEADER_SEPARATOR_STR + content_type_literal_;
+    }
+    else if (content_type_.media_type() != media_type_t::NONE)
     {
         line += CONTENT_TYPE_HEADER + HEADER_SEPARATOR_STR + mime_type_as_str(content_type_.media_type()) + CONTENT_SUBTYPE_SEPARATOR +
             content_type_.media_subtype();
+    }
+
+    if (!line.empty())
+    {
         for(const auto& [attr_name, attr_val] : content_type_.attributes()){
             if (attr_name == content_type_t::ATTR_BOUNDARY)
                 line += ATTRIBUTES_SEPARATOR_STR + attr_name + NAME_VALUE_SEPARATOR_STR + codec::QUOTE_CHAR + attr_val.buffer + codec::QUOTE_CHAR;
@@ -889,6 +919,7 @@ inline result_void mime::parse_header_line(const std::string& header_line)
         MAILXX_TRY(parse_content_type(header_value, media_type, media_subtype, attributes));
         MAILXX_TRY(merge_attributes(attributes));
 
+        content_type_literal_.clear();
         content_type_ = content_type_t(media_type, boost::algorithm::to_lower_copy(media_subtype), attributes);
         attributes_t::iterator bound_it = attributes.find(content_type_t::ATTR_BOUNDARY);
         if (bound_it != attributes.end())

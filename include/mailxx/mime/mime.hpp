@@ -385,6 +385,24 @@ public:
     content_type_t& content_type();
 
     /**
+    Setting the literal content type override used when formatting the header.
+
+    The value must contain only the media type and subtype. Existing attributes
+    and the attachment name are still emitted separately.
+
+    @param value Literal content type to format.
+    @return      Success or error.
+    **/
+    result_void content_type_literal(std::string value);
+
+    /**
+    Getting the literal content type override.
+
+    @return Literal content type override.
+    **/
+    std::string content_type_literal() const;
+
+    /**
     Setting the content ID.
 
     @param id         The content ID in the format `string1@string2`.
@@ -954,6 +972,11 @@ protected:
     Content type as a pair of top level media type and media subtype.
     **/
     content_type_t content_type_;
+
+    /**
+    Literal content type override used for formatting.
+    **/
+    std::string content_type_literal_;
 
     /**
     Name of mime.

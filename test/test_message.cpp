@@ -327,6 +327,48 @@ BOOST_AUTO_TEST_CASE(format_multipart_attachment_custom_header)
 }
 
 
+BOOST_AUTO_TEST_CASE(format_mime_content_type_literal)
+{
+    mime part;
+    BOOST_REQUIRE(part.content_type(mime::media_type_t::APPLICATION, "EDI-consent"));
+    BOOST_REQUIRE(part.content_type_literal("APPLICATION/EDI-consent"));
+    part.content_transfer_encoding(mime::content_transfer_encoding_t::BASE_64);
+    part.content_disposition(mime::content_disposition_t::ATTACHMENT);
+    part.name("SVF063");
+    part.content("payload");
+
+    string part_str;
+    BOOST_REQUIRE(part.format(part_str));
+    BOOST_CHECK_MSG_EQ(part_str,
+        "Content-Type: APPLICATION/EDI-consent; \r\n"
+        "  name=\"SVF063\"\r\n"
+        "Content-Transfer-Encoding: Base64\r\n"
+        "Content-Disposition: attachment; \r\n"
+        "  filename=\"SVF063\"\r\n"
+        "\r\n"
+        "cGF5bG9hZA==\r\n");
+}
+
+
+BOOST_AUTO_TEST_CASE(content_type_literal_resets_on_content_type_change)
+{
+    mime part;
+    BOOST_REQUIRE(part.content_type(mime::media_type_t::APPLICATION, "EDI-consent"));
+    BOOST_REQUIRE(part.content_type_literal("APPLICATION/EDI-consent"));
+    BOOST_CHECK(part.content_type_literal() == "APPLICATION/EDI-consent");
+
+    BOOST_REQUIRE(part.content_type(mime::media_type_t::APPLICATION, "pdf"));
+    BOOST_CHECK(part.content_type_literal().empty());
+    part.name("SVF063");
+    part.content("payload");
+
+    string part_str;
+    BOOST_REQUIRE(part.format(part_str));
+    BOOST_CHECK(part_str.find("Content-Type: application/pdf; \r\n  name=\"SVF063\"\r\n") != string::npos);
+    BOOST_CHECK(part_str.find("Content-Type: APPLICATION/EDI-consent") == string::npos);
+}
+
+
 BOOST_AUTO_TEST_CASE(remove_mime_custom_header)
 {
     mime part;
