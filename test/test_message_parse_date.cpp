@@ -10,6 +10,7 @@ Validates RFC 5322 date parsing edge cases.
 #define BOOST_TEST_MODULE message_parse_date_test
 
 #include <chrono>
+#include <string>
 
 #include <boost/test/unit_test.hpp>
 
@@ -50,4 +51,30 @@ BOOST_AUTO_TEST_CASE(parse_date_accepts_optional_seconds)
 
     BOOST_REQUIRE(parsed);
     BOOST_CHECK(parsed->get_sys_time() == make_zoned_time(1997, 11, 21, 9, 55, 0, -6, 0).get_sys_time());
+}
+
+BOOST_AUTO_TEST_CASE(parse_date_accepts_gmt_zone_name)
+{
+    parse_probe msg;
+    auto parsed = msg.parse_date("Fri, 24 Apr 2026 13:01:37 GMT");
+
+    BOOST_REQUIRE(parsed);
+    BOOST_CHECK(parsed->get_sys_time() == make_zoned_time(2026, 4, 24, 13, 1, 37, 0, 0).get_sys_time());
+}
+
+BOOST_AUTO_TEST_CASE(message_parse_accepts_gmt_date_header)
+{
+    const std::string msg_str =
+        "From: mailxx <address@mailxx.dev>\r\n"
+        "To: mailxx <address@mailxx.dev>\r\n"
+        "Subject: parse gmt date\r\n"
+        "Date: Fri, 24 Apr 2026 13:01:37 GMT\r\n"
+        "\r\n"
+        "hello\r\n";
+
+    mailxx::message msg;
+
+    BOOST_REQUIRE(msg.parse(msg_str));
+    BOOST_CHECK(msg.date_time().get_sys_time() == make_zoned_time(2026, 4, 24, 13, 1, 37, 0, 0).get_sys_time());
+    BOOST_CHECK(msg.subject() == "parse gmt date");
 }

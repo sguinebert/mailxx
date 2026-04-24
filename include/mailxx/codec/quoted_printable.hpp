@@ -280,7 +280,7 @@ public:
                         continue;
                     }
 
-                    // Avoid exception: Convert to uppercase.
+                    // Normalize hex digits before validation/decoding.
                     char next_char = std::toupper(static_cast<unsigned char>(*(ch + 1)));
                     char next_next_char = std::toupper(static_cast<unsigned char>(*(ch + 2)));
                     if (!is_allowed(next_char) || !is_allowed(next_next_char))

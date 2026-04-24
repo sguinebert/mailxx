@@ -716,7 +716,7 @@ protected:
     @param address_name  Name part of mail.
     @return              Parsed name part of the address or error.
     @todo                Not tested with charsets different than ASCII and UTF-8.
-    @todo                Throwing errors when Q codec is invalid?
+    @todo                Return a parse error when the Q codec is invalid?
     **/
     result<string_t> parse_address_name(const std::string& address_name);
 
@@ -2753,18 +2753,60 @@ result<std::chrono::zoned_time<std::chrono::seconds>> inline message::parse_date
     if (consume_char(sv, ':') && !parse_int(sv, 2, 2, second))
         return fail_generic();
 
-    // timezone +HHMM / -HHMM
+    // timezone +HHMM / -HHMM or common RFC 5322 obsolete names.
     sv = detail::trim_view(sv);
-    if (sv.empty() || (sv.front() != '+' && sv.front() != '-'))
-        return fail_generic();
-    const char tz_sign_char = sv.front();
-    sv.remove_prefix(1);
-
-    int tz_h = 0, tz_m = 0;
-    if (!parse_int(sv, 2, 2, tz_h) || !parse_int(sv, 2, 2, tz_m))
+    if (sv.empty())
         return fail_generic();
 
-    const int tz_sign = (tz_sign_char == '+') ? 1 : -1;
+    auto parse_named_zone = [](std::string_view& in) -> std::optional<std::chrono::minutes>
+    {
+        struct zone_entry { std::string_view name; int offset_minutes; };
+        constexpr std::array<zone_entry, 11> zones = {{
+            {"UT", 0}, {"UTC", 0}, {"GMT", 0},
+            {"EST", -5 * 60}, {"EDT", -4 * 60},
+            {"CST", -6 * 60}, {"CDT", -5 * 60},
+            {"MST", -7 * 60}, {"MDT", -6 * 60},
+            {"PST", -8 * 60}, {"PDT", -7 * 60}
+        }};
+
+        std::size_t len = 0;
+        while (len < in.size() && detail::is_ascii_alpha(in[len]))
+            ++len;
+        if (len == 0)
+            return std::nullopt;
+
+        const std::string_view name = in.substr(0, len);
+        for (const auto& zone : zones)
+        {
+            if (detail::iequals_ascii(name, zone.name))
+            {
+                in.remove_prefix(len);
+                return std::chrono::minutes{zone.offset_minutes};
+            }
+        }
+        return std::nullopt;
+    };
+
+    std::chrono::minutes offset{0};
+    if (sv.front() == '+' || sv.front() == '-')
+    {
+        const char tz_sign_char = sv.front();
+        sv.remove_prefix(1);
+
+        int tz_h = 0, tz_m = 0;
+        if (!parse_int(sv, 2, 2, tz_h) || !parse_int(sv, 2, 2, tz_m))
+            return fail_generic();
+
+        const int tz_sign = (tz_sign_char == '+') ? 1 : -1;
+        offset = std::chrono::hours{tz_sign * tz_h} + std::chrono::minutes{tz_sign * tz_m};
+    }
+    else
+    {
+        auto named_offset = parse_named_zone(sv);
+        if (!named_offset)
+            return fail_generic();
+        offset = *named_offset;
+    }
 
     // Validate date/time
     std::chrono::year_month_day ymd{std::chrono::year{year}, std::chrono::month{month}, std::chrono::day{static_cast<unsigned>(day)}};
@@ -2775,8 +2817,6 @@ result<std::chrono::zoned_time<std::chrono::seconds>> inline message::parse_date
         return fail_generic();
 
     auto local_tp = std::chrono::local_days{ymd} + std::chrono::hours{hour} + std::chrono::minutes{minute} + std::chrono::seconds{second};
-
-    const auto offset = std::chrono::hours{tz_sign * tz_h} + std::chrono::minutes{tz_sign * tz_m};
 
     // RFC 5322: local_time = utc + offset  =>  utc = local_time - offset
     auto sys_tp = std::chrono::sys_time<std::chrono::seconds>{local_tp.time_since_epoch() - offset};
