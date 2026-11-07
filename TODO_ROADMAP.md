@@ -20,6 +20,25 @@ The `Files to touch` column lists the most likely entry points, not necessarily 
   - `Medium`: formatting/parsing changes with protocol impact
   - `High`: public API, data model, or wire-format behavior changes
 
+## Status
+
+Items 1 to 14 and 16 are done. The library stays header-only. A MIME body stays a `std::string`, which already carries a NUL. `send(const message&)`, `uid_fetch_rfc822`, and `dialog::read_line` stay as they are.
+
+- Items 1 to 7: frozen formatting, stable parse, and the strict codec checks covered by `test_message`, `test_message_stable`, and `test_codec_headers`.
+- Items 8, 9, 10, 12, 13, 14, and 16: RFC 2231 continuations, the real Q-codec budget, Q separated from quoted-printable, US-ASCII as the default charset, strict 7bit/8bit, and reserved headers.
+- Item 11: `mime::parse(std::string_view)` walks the caller buffer. A line is copied only when it is kept. `format_content` reserves one string for quoted-printable, 7bit, 8bit, and binary. Q and percent still return one string per folded line, because a continuation is a separate header parameter. No translation unit was extracted. A clean compile of `test_message` takes about 14 seconds.
+- Dialogue: `send_frozen` accepts DSN on `MAIL FROM` and `RCPT TO` only, and uses `BDAT` when `CHUNKING` was announced. One `UID FETCH` asks for flags and a bounded `BODY.PEEK`. `IDLE` events are `EXISTS`, `EXPUNGE`, and `FETCH`. `UID MOVE` is refused unless `MOVE` was announced.
+- Extensions, each only after the matching capability: `ENABLE CONDSTORE`, `ENABLE QRESYNC` with one `HIGHESTMODSEQ` token, `COMPRESS DEFLATE` under the dialogue with the literal size as the decompressed ceiling, and `ENABLE UTF8=ACCEPT`. SMTP international addresses already use `SMTPUTF8` when that capability was announced.
+- The local Postfix accepts frozen `BDAT` and DSN submissions and returns `2.0.0 Ok: N bytes queued as <id>`. The local Dovecot advertises `CONDSTORE`, `QRESYNC`, and `MOVE`: the proof enables the first two, reads flags with a bounded `BODY.PEEK`, sees `IDLE EXISTS`, and `UID MOVE`s the message. `COMPRESS=DEFLATE` and `UTF8=ACCEPT` are not announced, so those commands are not sent.
+
+## Decisions
+
+15. The body, the attachment filename, and the display name stay in the current types. A `std::string` already stores a NUL, and splitting storage would change every format and parse caller.
+
+17. `mixed` stays a multipart subtype, not a top-level media type. `7bit` is a content-transfer-encoding; US-ASCII is a charset. `content_disposition_t` stays an enumeration, and filename parameters stay on the attribute map.
+
+18. The codec base stays a holder for the line policy. `encode` and `decode` are not a virtual interface: Base64, quoted-printable, Q, percent, and binary do not share one return type, and a virtual call would not remove a copy.
+
 ## Work Items
 
 | ID | Work item | Source TODOs | Proposed implementation | Priority | Effort | Risk | Files to touch |
@@ -45,7 +64,4 @@ The `Files to touch` column lists the most likely entry points, not necessarily 
 
 ## Suggested Order
 
-1. Close the test-backed formatting and parsing bugs first: items `1` through `6`.
-2. Then tackle RFC correctness in codecs and MIME attribute handling: items `8`, `9`, `12`, `13`, and `14`.
-3. After behavior is stable, clean up API seams and data models: items `7`, `10`, `15`, and `16`.
-4. Leave the larger design questions for last: items `17` and `18`.
+Items 1 to 14 and 16 are closed. Items 15, 17, and 18 are the decisions above: the types stay as they are.

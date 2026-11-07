@@ -18,13 +18,13 @@ copy at https://opensource.org/licenses/MIT.
 #pragma warning(disable:4251)
 #endif
 
+#include <cctype>
 #include <string>
 #include <vector>
 #include <tuple>
 #include <boost/algorithm/string.hpp>
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/codec/base64.hpp>
-#include <mailxx/codec/quoted_printable.hpp>
 #include <mailxx/detail/result.hpp>
 #include <mailxx/config.hpp>
 
@@ -70,31 +70,43 @@ public:
     /**
     Encoding a text by applying the given method.
 
-    @param text    String to encode.
-    @param charset Charset used by the string.
-    @param method  Allowed encoding methods.
-    @return        Encoded string.
-    @todo          Merge text and charset into a single parameter of type `string_t`.
-    @todo          It must take another parameter for the header name length in order to remove the hardcoded constant.
+    `header_prefix_len` is the length already consumed on the first line (`From: ` and
+    the same). The first encoded word fits in `line1_policy - header_prefix_len`.
+    Continuation words fit in `lines_policy` after a two-space indent when a prefix
+    was given. The encoded-word delimiters and the charset are subtracted from both.
+
+    @param text              String to encode.
+    @param charset           Charset used by the string.
+    @param method            Allowed encoding methods.
+    @param header_prefix_len Characters already used on the first header line.
+    @return                  Encoded words, each including its `=?...?=` wrapper.
     **/
-    result<std::vector<std::string>> encode(const std::string& text, const std::string& charset, codec_t method) const
+    result<std::vector<std::string>> encode(const std::string& text, const std::string& charset, codec_t method,
+        std::string::size_type header_prefix_len = 0) const
     {
-        // TODO: The constant has to depend of the header length.
-        const std::string::size_type Q_FLAGS_LEN = 12;
-        std::vector<std::string> enc_text, text_c;
+        const std::string charset_up = boost::to_upper_copy(charset);
+        const std::string::size_type overhead = ENCODED_WORD_FIXED + charset_up.size();
+        if (line1_policy_ <= header_prefix_len + overhead || lines_policy_ <= overhead)
+            return fail<std::vector<std::string>>(errc::codec_invalid_input, "invalid Q encoding", "line policy too small");
+
+        const std::string::size_type first_room = line1_policy_ - header_prefix_len - overhead;
+        const std::string::size_type continuation_indent = header_prefix_len == 0 ? 0 : NEW_LINE_INDENT;
+        if (lines_policy_ <= continuation_indent + overhead)
+            return fail<std::vector<std::string>>(errc::codec_invalid_input, "invalid Q encoding", "line policy too small");
+        const std::string::size_type next_room = lines_policy_ - continuation_indent - overhead;
+
+        std::vector<std::string> text_c;
         std::string codec_flag;
         if (method == codec_t::BASE64)
         {
             codec_flag = BASE64_CODEC_STR;
-            base64 b64(line1_policy_ - Q_FLAGS_LEN, lines_policy_ - Q_FLAGS_LEN);
+            base64 b64(first_room, next_room);
             text_c = b64.encode(text);
         }
         else if (method == codec_t::QUOTED_PRINTABLE)
         {
             codec_flag = QP_CODEC_STR;
-            quoted_printable qp(line1_policy_ - Q_FLAGS_LEN, lines_policy_ - Q_FLAGS_LEN);
-            qp.q_codec_mode(true);
-            auto enc_res = qp.encode(text);
+            auto enc_res = encode_q_payload(text, first_room, next_room);
             if (!enc_res)
                 return fail<std::vector<std::string>>(std::move(enc_res).error());
             text_c = std::move(*enc_res);
@@ -102,9 +114,15 @@ public:
         else
             return fail<std::vector<std::string>>(errc::codec_invalid_input, "invalid Q encoding method");
 
-        // TODO: Name the magic constant for Q delimiters.
-        for (auto s = text_c.begin(); s != text_c.end(); s++)
-            enc_text.push_back("=?" + boost::to_upper_copy(charset) + "?" + codec_flag + "?" + *s + "?=");
+        const std::string prefix = std::string(ENCODED_WORD_START) + charset_up + ENCODED_WORD_SEP + codec_flag + ENCODED_WORD_SEP;
+        std::vector<std::string> enc_text;
+        enc_text.reserve(text_c.size());
+        for (const auto& chunk : text_c)
+        {
+            if (chunk.empty())
+                continue;
+            enc_text.push_back(prefix + chunk + std::string(ENCODED_WORD_END));
+        }
 
         return ok(std::move(enc_text));
     }
@@ -126,7 +144,7 @@ public:
             return fail<std::tuple<std::string, std::string, codec_t>>(errc::codec_invalid_input,
                 "invalid Q encoding", "missing codec type separator");
         std::string charset = boost::to_upper_copy(text.substr(charset_pos + 1, method_pos - charset_pos - 1));
-        if (charset.empty())
+        if (charset.empty() || !is_charset_token(charset))
             return fail<std::tuple<std::string, std::string, codec_t>>(errc::codec_invalid_input,
                 "invalid Q encoding", "missing charset");
         std::string::size_type content_pos = text.find(QUESTION_MARK_CHAR, method_pos + 1);
@@ -171,7 +189,7 @@ public:
 
     @param text        String to decode.
     @return            Decoded string, its charset and its codec method.
-    @todo              Returning value to hold `string_t` instead of two `std::string`.
+    The result stays text, charset, and codec. The caller builds a `string_t` when it needs one.
     **/
     result<std::tuple<std::string, std::string, codec_t>> check_decode(const std::string& text) const
     {
@@ -255,6 +273,12 @@ private:
     **/
     inline static const std::string QP_CODEC_STR{"Q"};
 
+    static constexpr std::string_view ENCODED_WORD_START{"=?"};
+    static constexpr char ENCODED_WORD_SEP = '?';
+    static constexpr std::string_view ENCODED_WORD_END{"?="};
+    static constexpr std::string::size_type ENCODED_WORD_FIXED = 7;
+    static constexpr std::string::size_type NEW_LINE_INDENT = 2;
+
     /**
     Decoding by using variation of the Quoted Printable method.
 
@@ -263,11 +287,85 @@ private:
     **/
     result<std::string> decode_qp(const std::string& text) const
     {
-        quoted_printable qp(line1_policy_, lines_policy_);
-        qp.q_codec_mode(true);
+        std::string dec_text;
+        dec_text.reserve(text.size());
+        for (std::string::size_type i = 0; i < text.size(); ++i)
+        {
+            const unsigned char ch = static_cast<unsigned char>(text[i]);
+            if (ch == static_cast<unsigned char>(UNDERSCORE_CHAR))
+            {
+                dec_text.push_back(SPACE_CHAR);
+                continue;
+            }
+            if (ch != static_cast<unsigned char>(EQUAL_CHAR))
+            {
+                dec_text.push_back(static_cast<char>(ch));
+                continue;
+            }
+            if (i + 2 >= text.size())
+                return fail<std::string>(errc::codec_invalid_input, "invalid Q encoding", "truncated hexadecimal");
+            const char high = std::toupper(static_cast<unsigned char>(text[i + 1]));
+            const char low = std::toupper(static_cast<unsigned char>(text[i + 2]));
+            if (HEX_DIGITS.find(high) == std::string::npos || HEX_DIGITS.find(low) == std::string::npos)
+                return fail<std::string>(errc::codec_invalid_input, "invalid Q encoding", "bad hexadecimal digit");
+            dec_text.push_back(static_cast<char>((hex_digit_to_int(high) << 4) + hex_digit_to_int(low)));
+            i += 2;
+        }
+        return ok(std::move(dec_text));
+    }
+
+    result<std::vector<std::string>> encode_q_payload(const std::string& text, std::string::size_type first_room,
+        std::string::size_type next_room) const
+    {
         std::vector<std::string> lines;
-        lines.push_back(text);
-        return qp.decode(lines);
+        std::string line;
+        std::string::size_type room = first_room;
+        auto break_line = [&]()
+        {
+            if (!line.empty())
+                lines.push_back(std::move(line));
+            line.clear();
+            room = next_room;
+        };
+
+        for (unsigned char ch : text)
+        {
+            std::string atom;
+            if (ch == static_cast<unsigned char>(SPACE_CHAR))
+                atom = std::string(1, UNDERSCORE_CHAR);
+            else if (ch > static_cast<unsigned char>(SPACE_CHAR) && ch <= static_cast<unsigned char>(TILDE_CHAR) &&
+                ch != static_cast<unsigned char>(EQUAL_CHAR) && ch != static_cast<unsigned char>(QUESTION_MARK_CHAR) &&
+                ch != static_cast<unsigned char>(UNDERSCORE_CHAR))
+                atom = std::string(1, static_cast<char>(ch));
+            else
+            {
+                atom.push_back(EQUAL_CHAR);
+                atom.push_back(HEX_DIGITS[(ch >> 4) & 0x0F]);
+                atom.push_back(HEX_DIGITS[ch & 0x0F]);
+            }
+
+            if (!line.empty() && line.size() + atom.size() > room)
+                break_line();
+            if (atom.size() > room)
+                return fail<std::vector<std::string>>(errc::codec_invalid_input, "invalid Q encoding", "line policy too small");
+            line += atom;
+        }
+        if (!line.empty())
+            lines.push_back(std::move(line));
+        return ok(std::move(lines));
+    }
+
+    static bool is_charset_token(const std::string& charset)
+    {
+        if (charset.empty())
+            return false;
+        for (unsigned char ch : charset)
+        {
+            if (std::isalnum(ch) || ch == '-' || ch == '_')
+                continue;
+            return false;
+        }
+        return true;
     }
 
     /**

@@ -13,6 +13,9 @@ copy at https://opensource.org/licenses/MIT.
 
 #pragma once
 
+#include <chrono>
+#include <cstddef>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +38,7 @@ copy at https://opensource.org/licenses/MIT.
 #include <mailxx/detail/result.hpp>
 
 #include <mailxx/net/dialog.hpp>
+#include <mailxx/net/loopback.hpp>
 #include <mailxx/net/error_mapping.hpp>
 #include <mailxx/net/tls_mode.hpp>
 #include <mailxx/net/upgradable_stream.hpp>
@@ -47,6 +51,7 @@ copy at https://opensource.org/licenses/MIT.
 #include <mailxx/detail/error_detail.hpp>
 #include <mailxx/detail/sasl.hpp>
 #include <mailxx/detail/sanitize.hpp>
+#include <mailxx/detail/secure_clear.hpp>
 #include <mailxx/detail/redact.hpp>
 #include <mailxx/detail/reconnection.hpp>
 #include <mailxx/oauth2/token_source.hpp>
@@ -187,6 +192,35 @@ public:
     }
 
     /**
+     * Submit an already serialized MIME body.
+     * Dot-stuffing is the only transformation. The result is queued only for
+     * the Postfix queue reply; any other outcome after the final dot stays unknown.
+     */
+    awaitable<submission> send_frozen(std::span<const std::byte> mime, std::size_t announced_size, const envelope& env)
+    {
+        mailxx::detail::async_mutex::scoped_lock guard;
+        auto guard_res = co_await mutex_.lock();
+        if (!guard_res)
+            co_return submission{};
+        guard = std::move(*guard_res);
+        co_return co_await send_frozen_impl(mime, announced_size, env, nullptr);
+    }
+
+    /**
+     * Submit already serialized octets with DSN parameters on MAIL FROM and RCPT TO.
+     * The body is unchanged. There is no pipelining on this path.
+     */
+    awaitable<submission> send_frozen(std::span<const std::byte> mime, std::size_t announced_size, const envelope_dsn& env)
+    {
+        mailxx::detail::async_mutex::scoped_lock guard;
+        auto guard_res = co_await mutex_.lock();
+        if (!guard_res)
+            co_return submission{};
+        guard = std::move(*guard_res);
+        co_return co_await send_frozen_impl(mime, announced_size, env, &env.dsn);
+    }
+
+    /**
      * Send message with DSN (Delivery Status Notification) support.
      * Requires server to advertise DSN capability.
      * 
@@ -217,6 +251,11 @@ public:
     bool supports_dsn() const
     {
         return capabilities_known_ && capabilities_.supports("DSN");
+    }
+
+    bool supports_chunking() const
+    {
+        return capabilities_known_ && capabilities_.supports("CHUNKING");
     }
 
     // ==================== SMTP Extensions ====================
@@ -366,6 +405,15 @@ public:
     }
 
     const capabilities& server_capabilities() const { return capabilities_; }
+
+    [[nodiscard]] std::optional<std::array<std::uint8_t, 32>> peer_certificate_sha256() const
+    {
+        if (!dialog_.has_value())
+            return std::nullopt;
+        return dialog_->stream().peer_certificate_sha256();
+    }
+
+    void clear_secrets() {}
 
     // ==================== Auto-Reconnection ====================
 
@@ -765,6 +813,35 @@ private:
         return state_ == state::ehlo_done || state_ == state::authenticated || helo_only_;
     }
 
+    [[nodiscard]] mailxx::result<void> ensure_data_permitted() const
+    {
+        if (!data_unresolved_)
+            return mailxx::ok();
+        return mailxx::fail_void(errc::smtp_invalid_state,
+            "DATA is refused after an unresolved submission.",
+            state_detail("DATA"));
+    }
+
+    submission classify_frozen(reply rep)
+    {
+        submission out;
+        out.server = std::move(rep);
+        if (out.server.is_transient_negative() || out.server.is_permanent_negative())
+        {
+            out.state = submission_state::rejected;
+            return out;
+        }
+        if (auto id = queued_id(out.server))
+        {
+            out.state = submission_state::queued;
+            out.queue_id = std::move(*id);
+            return out;
+        }
+        out.state = submission_state::unknown;
+        data_unresolved_ = true;
+        return out;
+    }
+
     void reset_capabilities() noexcept
     {
         capabilities_.entries.clear();
@@ -1014,10 +1091,36 @@ private:
             co_return mailxx::fail<void>(make_net_error(resolve_ec, mailxx::net::io_stage::resolve, "resolve", host, service));
 
         mailxx::net::upgradable_stream stream(executor_);
-        auto [connect_ec, endpoint] = co_await async_connect(stream.lowest_layer(), endpoints, use_nothrow_awaitable);
-        (void)endpoint;
+        mailxx::asio::error_code connect_ec;
+        if (options_.require_loopback)
+        {
+            const auto loopback = mailxx::net::loopback_endpoints(endpoints);
+            if (loopback.empty())
+                co_return fail_void(errc::net_connect_failed, "Loopback address required.", host);
+            auto [ec, endpoint] = co_await async_connect(stream.lowest_layer(), loopback, use_nothrow_awaitable);
+            connect_ec = ec;
+            (void)endpoint;
+        }
+        else
+        {
+            auto [ec, endpoint] = co_await async_connect(stream.lowest_layer(), endpoints, use_nothrow_awaitable);
+            connect_ec = ec;
+            (void)endpoint;
+        }
         if (connect_ec)
             co_return mailxx::fail<void>(make_net_error(connect_ec, mailxx::net::io_stage::connect, "connect", host, service));
+
+        if (options_.require_loopback)
+        {
+            mailxx::asio::error_code remote_ec;
+            const auto remote = stream.lowest_layer().remote_endpoint(remote_ec);
+            if (remote_ec || !mailxx::net::is_loopback_address(remote.address()))
+            {
+                mailxx::asio::error_code close_ec;
+                stream.lowest_layer().close(close_ec);
+                co_return fail_void(errc::net_connect_failed, "Loopback address required.", host);
+            }
+        }
 
         if (mode == mailxx::net::tls_mode::implicit)
         {
@@ -1040,10 +1143,13 @@ private:
             }
         }
 
-        dialog_.emplace(std::move(stream));
+        if (options_.timeout)
+            options_.timeouts.default_timeout = *options_.timeout;
+        dialog_.emplace(std::move(stream), mailxx::net::DEFAULT_MAX_LINE_LENGTH, options_.timeouts.get_greeting());
         dialog_->set_peer(host, service);
         configure_trace();
         state_ = state::connected;
+        data_unresolved_ = false;
         reset_capabilities();
 
         if (mode == mailxx::net::tls_mode::starttls && options_.auto_starttls)
@@ -1230,6 +1336,8 @@ private:
 
     awaitable<mailxx::result<reply>> send_impl(const mailxx::message& msg, const envelope& env)
     {
+        if (auto gate = ensure_data_permitted(); !gate)
+            co_return mailxx::fail<reply>(std::move(gate).error());
         if (!has_greeting())
             co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
@@ -1316,8 +1424,260 @@ private:
         co_return rep;
     }
 
+    awaitable<submission> send_frozen_bdat(const char* raw, std::size_t size)
+    {
+        if (!dialog_ || raw == nullptr)
+            co_return submission{};
+        auto gate = ensure_data_permitted();
+        if (!gate)
+            co_return submission{};
+
+        dialog().timeout(options_.timeouts.get_data_transfer(size));
+        std::size_t off = 0;
+        while (off < size)
+        {
+            const std::size_t chunk = std::min(frozen_write_block, size - off);
+            const bool last = off + chunk == size;
+            std::string cmd;
+            mailxx::detail::append_sv(cmd, "BDAT ");
+            mailxx::detail::append_uint(cmd, static_cast<std::uint64_t>(chunk));
+            if (last)
+                mailxx::detail::append_sv(cmd, " LAST");
+            arm_smtp_command(cmd);
+            std::string_view cmd_view(cmd);
+            auto written = co_await dialog().write_line_view_r(cmd_view);
+            if (!written)
+                co_return submission{};
+            const std::string_view body(raw + off, chunk);
+            written = co_await dialog().write_raw_view_r(body);
+            if (!written)
+            {
+                data_unresolved_ = true;
+                submission out;
+                out.state = submission_state::unknown;
+                co_return out;
+            }
+            auto rep_res = co_await read_reply_impl(cmd);
+            if (!rep_res)
+            {
+                data_unresolved_ = true;
+                submission out;
+                out.state = submission_state::unknown;
+                co_return out;
+            }
+            reply rep = std::move(*rep_res);
+            if (!last)
+            {
+                if (!rep.is_positive_completion())
+                {
+                    submission out;
+                    out.server = std::move(rep);
+                    out.state = submission_state::rejected;
+                    co_return out;
+                }
+                off += chunk;
+                continue;
+            }
+            co_return classify_frozen(std::move(rep));
+        }
+        co_return submission{};
+    }
+
+    awaitable<submission> send_frozen_impl(std::span<const std::byte> mime, std::size_t announced_size, const envelope& env,
+        const dsn_options* dsn)
+    {
+        if (data_unresolved_ || !options_.timeout)
+            co_return submission{};
+        if (mime.size() != announced_size || mime.size() < 2)
+            co_return submission{};
+
+        const auto* raw = reinterpret_cast<const char*>(mime.data());
+        if (raw[mime.size() - 2] != '\r' || raw[mime.size() - 1] != '\n')
+            co_return submission{};
+
+        bool has_8bit = false;
+        for (std::size_t i = 0; i < mime.size(); ++i)
+        {
+            const unsigned char ch = static_cast<unsigned char>(raw[i]);
+            if (ch == 0)
+                co_return submission{};
+            if (ch > 127)
+                has_8bit = true;
+        }
+
+        if (env.mail_from.empty() || env.rcpt_to.empty())
+            co_return submission{};
+        if (!validate_no_crlf_or_nul(env.mail_from, "mail_from"))
+            co_return submission{};
+        for (const auto& rcpt : env.rcpt_to)
+        {
+            if (rcpt.empty() || !validate_no_crlf_or_nul(rcpt, "rcpt_to"))
+                co_return submission{};
+        }
+        if (!has_greeting() || !has_helo_or_ehlo())
+            co_return submission{};
+        if (supports_size())
+        {
+            const auto limit = get_size_limit();
+            if (limit.exceeds(announced_size))
+                co_return submission{};
+        }
+
+        if (options_.timeout)
+            options_.timeouts.default_timeout = *options_.timeout;
+
+        bool needs_utf8 = contains_utf8(env.mail_from);
+        if (!needs_utf8)
+        {
+            for (const auto& rcpt : env.rcpt_to)
+            {
+                if (contains_utf8(rcpt))
+                {
+                    needs_utf8 = true;
+                    break;
+                }
+            }
+        }
+
+        mail_data_info info;
+        info.size = announced_size;
+        info.has_8bit = has_8bit;
+        info.needs_utf8 = needs_utf8;
+
+        std::string cmd;
+        if (dsn != nullptr && dsn->enabled() && !supports_dsn())
+            co_return submission{};
+
+        mailxx::detail::append_sv(cmd, "MAIL FROM: ");
+        mailxx::detail::append_angle_addr(cmd, env.mail_from);
+        append_mail_extensions(cmd, info);
+        if (dsn != nullptr && dsn->enabled())
+        {
+            const std::string ret = dsn->ret_string();
+            if (!ret.empty())
+            {
+                mailxx::detail::append_sv(cmd, " RET=");
+                mailxx::detail::append_sv(cmd, ret);
+            }
+            if (!dsn->envid.empty())
+            {
+                if (!validate_no_crlf_or_nul(dsn->envid, "dsn.envid"))
+                    co_return submission{};
+                mailxx::detail::append_sv(cmd, " ENVID=");
+                mailxx::detail::append_sv(cmd, dsn->envid);
+            }
+        }
+        auto rep_res = co_await command_impl(cmd);
+        if (!rep_res)
+            co_return submission{};
+        reply rep = std::move(*rep_res);
+        if (!rep.is_positive_completion())
+        {
+            submission out;
+            out.server = std::move(rep);
+            co_return out;
+        }
+
+        for (const auto& rcpt : env.rcpt_to)
+        {
+            cmd.clear();
+            mailxx::detail::append_sv(cmd, "RCPT TO: ");
+            mailxx::detail::append_angle_addr(cmd, rcpt);
+            if (dsn != nullptr && dsn->enabled())
+            {
+                const std::string notify = dsn->notify_string();
+                if (!notify.empty())
+                {
+                    mailxx::detail::append_sv(cmd, " NOTIFY=");
+                    mailxx::detail::append_sv(cmd, notify);
+                }
+                if (!dsn->orcpt.empty())
+                {
+                    if (!validate_no_crlf_or_nul(dsn->orcpt, "dsn.orcpt"))
+                        co_return submission{};
+                    mailxx::detail::append_sv(cmd, " ORCPT=rfc822;");
+                    mailxx::detail::append_sv(cmd, dsn->orcpt);
+                }
+            }
+            rep_res = co_await command_impl(cmd);
+            if (!rep_res)
+                co_return submission{};
+            rep = std::move(*rep_res);
+            if (!rep.is_positive_completion())
+            {
+                submission out;
+                out.server = std::move(rep);
+                co_return out;
+            }
+        }
+
+        if (supports_chunking())
+            co_return co_await send_frozen_bdat(raw, mime.size());
+
+        rep_res = co_await command_impl("DATA");
+        if (!rep_res)
+            co_return submission{};
+        rep = std::move(*rep_res);
+        if (!rep.is_positive_intermediate())
+        {
+            submission out;
+            out.server = std::move(rep);
+            co_return out;
+        }
+
+        trace_payload("DATA", announced_size);
+        dialog().timeout(options_.timeouts.get_data_transfer(static_cast<std::size_t>(announced_size)));
+        std::string block;
+        block.reserve(frozen_write_block);
+        bool at_bol = true;
+        char prev = 0;
+        for (std::size_t i = 0; i < mime.size(); ++i)
+        {
+            const char c = raw[i];
+            const std::size_t need = (at_bol && c == '.') ? 2u : 1u;
+            if (!block.empty() && block.size() + need > frozen_write_block)
+            {
+                const std::string_view view(block);
+                auto wr = co_await dialog().write_raw_view_r(view);
+                if (!wr)
+                    co_return submission{};
+                block.clear();
+            }
+            if (at_bol && c == '.')
+                block.push_back('.');
+            block.push_back(c);
+            at_bol = (prev == '\r' && c == '\n');
+            prev = c;
+        }
+        if (!block.empty())
+        {
+            const std::string_view view(block);
+            auto wr = co_await dialog().write_raw_view_r(view);
+            if (!wr)
+                co_return submission{};
+            block.clear();
+        }
+
+        constexpr std::string_view terminator = ".\r\n";
+        auto term = co_await dialog().write_raw_view_r(terminator);
+        if (!term)
+            co_return submission{};
+
+        rep_res = co_await read_reply_impl("DATA");
+        if (!rep_res)
+        {
+            data_unresolved_ = true;
+            submission out;
+            out.state = submission_state::unknown;
+            co_return out;
+        }
+        co_return classify_frozen(std::move(*rep_res));
+    }
+
     awaitable<mailxx::result<reply>> send_streaming_impl(const envelope& env, const mailxx::message& msg)
     {
+        if (auto gate = ensure_data_permitted(); !gate)
+            co_return mailxx::fail<reply>(std::move(gate).error());
         if (!has_greeting())
             co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
@@ -1464,6 +1824,8 @@ private:
      */
     awaitable<mailxx::result<reply>> send_dsn_impl(const mailxx::message& msg, const envelope_dsn& env)
     {
+        if (auto gate = ensure_data_permitted(); !gate)
+            co_return mailxx::fail<reply>(std::move(gate).error());
         if (!has_greeting())
             co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
@@ -1642,6 +2004,8 @@ private:
      */
     awaitable<mailxx::result<reply>> send_ext_impl(const mailxx::message& msg, const envelope_ext& env)
     {
+        if (auto gate = ensure_data_permitted(); !gate)
+            co_return mailxx::fail<reply>(std::move(gate).error());
         if (!has_greeting())
             co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
@@ -1858,6 +2222,8 @@ private:
         const envelope& env,
         progress_callback_t progress)
     {
+        if (auto gate = ensure_data_permitted(); !gate)
+            co_return mailxx::fail<reply>(std::move(gate).error());
         if (!has_greeting())
             co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
@@ -1972,6 +2338,8 @@ private:
      */
     awaitable<mailxx::result<reply>> send_pipelined_impl(const mailxx::message& msg, const envelope& env)
     {
+        if (auto gate = ensure_data_permitted(); !gate)
+            co_return mailxx::fail<reply>(std::move(gate).error());
         if (!has_greeting())
             co_return fail<reply>(errc::smtp_invalid_state, "Send requires a greeting.", state_detail("SEND"));
         if (!has_helo_or_ehlo())
@@ -2103,10 +2471,47 @@ private:
         co_return rep;
     }
 
+    void arm_smtp_command(std::string_view line)
+    {
+        if (options_.timeout)
+            options_.timeouts.default_timeout = *options_.timeout;
+        if (!dialog_)
+            return;
+        auto starts = [&](std::string_view prefix)
+        {
+            return line.size() >= prefix.size() && line.substr(0, prefix.size()) == prefix;
+        };
+        if (starts("MAIL FROM"))
+            dialog_->timeout(options_.timeouts.get_mail_from());
+        else if (starts("RCPT TO"))
+            dialog_->timeout(options_.timeouts.get_rcpt_to());
+        else if (line == "DATA" || starts("BDAT"))
+            dialog_->timeout(options_.timeouts.get_data_cmd());
+        else if (starts("AUTH"))
+            dialog_->timeout(options_.timeouts.get_auth());
+        else if (line == "STARTTLS")
+            dialog_->timeout(options_.timeouts.get_starttls());
+        else if (starts("EHLO") || starts("HELO"))
+            dialog_->timeout(options_.timeouts.get_ehlo());
+        else if (line == "QUIT")
+            dialog_->timeout(options_.timeouts.get_quit());
+        else
+            dialog_->timeout(options_.timeouts.get_command());
+    }
+
     awaitable<mailxx::result<reply>> command_impl(std::string_view line)
     {
+        arm_smtp_command(line);
+        if (line == "DATA" || line.starts_with("BDAT"))
+        {
+            auto gate = ensure_data_permitted();
+            if (!gate)
+                co_return mailxx::fail<reply>(std::move(gate).error());
+        }
         std::string command(line);
+        mailxx::detail::secret_guard wipe_command(&command);
         std::string payload = command;
+        mailxx::detail::secret_guard wipe_payload(&payload);
         std::string_view payload_view(payload);
         MAILXX_TRY_CO_AWAIT(dialog().write_line_view_r(payload_view));
         co_return co_await read_reply_impl(command);
@@ -2540,6 +2945,8 @@ private:
     state state_{state::disconnected};
     bool helo_only_{false};
     bool capabilities_known_{false};
+    bool data_unresolved_{false};
+    static constexpr std::size_t frozen_write_block = 8192;
     reconnection_policy reconnection_policy_;  ///< Auto-reconnection configuration
 };
 

@@ -106,6 +106,7 @@ public:
     {
         if (client_)
         {
+            client_->clear_secrets();
             metadata_.mark_used();
             if (auto pool = pool_.lock())
             {

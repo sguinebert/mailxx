@@ -10,6 +10,7 @@
 #include <vector>
 #include <mailxx/net/dialog.hpp>
 #include <mailxx/net/tls_options.hpp>
+#include <mailxx/detail/timeout_config.hpp>
 
 namespace mailxx::pop3
 {
@@ -48,7 +49,9 @@ using uidl_list = std::map<unsigned, std::string>;
 struct options
 {
     std::size_t max_line_length = mailxx::net::DEFAULT_MAX_LINE_LENGTH;
+    std::size_t max_message_size = 64u * 1024u * 1024u;
     std::optional<std::chrono::steady_clock::duration> timeout = std::nullopt;
+    mailxx::timeout_config timeouts{};
     std::string default_sni;
     bool auto_starttls = false;
     bool allow_cleartext_auth = false;
@@ -57,6 +60,7 @@ struct options
     mailxx::net::tls_mode default_tls_mode = mailxx::net::tls_mode::none;
     bool redact_secrets_in_trace = true;
     bool store_credentials_for_reconnect = false;
+    bool require_loopback = false;
 };
 
 // ==================== Progress Callback Types ====================

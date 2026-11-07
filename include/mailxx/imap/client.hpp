@@ -21,6 +21,7 @@ copy at https://opensource.org/licenses/MIT.
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 #include <array>
 #include <mutex>
@@ -39,12 +40,14 @@ copy at https://opensource.org/licenses/MIT.
 #include <mailxx/detail/result.hpp>
 #include <mailxx/detail/sasl.hpp>
 #include <mailxx/detail/sanitize.hpp>
+#include <mailxx/detail/secure_clear.hpp>
 #include <mailxx/detail/output_sink.hpp>
 #include <mailxx/oauth2/token_source.hpp>
 #include <mailxx/imap/error_mapping.hpp>
 #include <mailxx/imap/types.hpp>
 #include <mailxx/mime/message.hpp>
 #include <mailxx/net/dialog.hpp>
+#include <mailxx/net/loopback.hpp>
 #include <mailxx/net/tls_mode.hpp>
 #include <mailxx/net/upgradable_stream.hpp>
 
@@ -118,6 +121,13 @@ public:
             co_return mailxx::ok(std::move(line));
         }
 
+        awaitable<result<idle_event>> idle_read_event()
+        {
+            std::string line;
+            MAILXX_CO_TRY_ASSIGN(line, co_await idle_read());
+            co_return mailxx::ok(parse_idle_event(line));
+        }
+
         awaitable<result<response>> idle_stop()
         {
             if (!active_ || owner_ == nullptr)
@@ -186,6 +196,15 @@ public:
     }
 
     executor_type get_executor() const { return executor_; }
+
+    [[nodiscard]] std::optional<std::array<std::uint8_t, 32>> peer_certificate_sha256() const
+    {
+        if (!dialog_.has_value())
+            return std::nullopt;
+        return dialog_->stream().peer_certificate_sha256();
+    }
+
+    void clear_secrets() {}
 
     awaitable<result_void> connect(const std::string& host, unsigned short port)
     {
@@ -363,6 +382,39 @@ public:
         mailbox_stat stat;
         for (const auto& line : resp.untagged_lines)
             parse_mailbox_stat(line, stat);
+        stat.highest_modseq = highest_modseq_;
+        co_return mailxx::ok(std::make_pair(std::move(resp), stat));
+    }
+
+    awaitable<result<std::pair<response, mailbox_stat>>> select_qresync(std::string_view mailbox,
+        std::uint32_t uid_validity, std::uint64_t modseq)
+    {
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
+        if (!qresync_enabled_)
+        {
+            co_return mailxx::fail<std::pair<response, mailbox_stat>>(
+                mailxx::errc::imap_invalid_state,
+                "QRESYNC is not enabled.");
+        }
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox"));
+        std::string box;
+        MAILXX_CO_TRY_ASSIGN(box, mailxx::imap::to_mailbox(mailbox));
+        std::string cmd;
+        mailxx::detail::append_sv(cmd, "SELECT");
+        mailxx::detail::append_space(cmd);
+        mailxx::detail::append_sv(cmd, box);
+        mailxx::detail::append_sv(cmd, " (QRESYNC (");
+        mailxx::detail::append_uint(cmd, uid_validity);
+        mailxx::detail::append_char(cmd, ' ');
+        mailxx::detail::append_uint(cmd, modseq);
+        mailxx::detail::append_sv(cmd, "))");
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
+        mailbox_stat stat;
+        for (const auto& line : resp.untagged_lines)
+            parse_mailbox_stat(line, stat);
+        stat.highest_modseq = highest_modseq_;
         co_return mailxx::ok(std::make_pair(std::move(resp), stat));
     }
 
@@ -420,6 +472,11 @@ public:
 
     awaitable<result<std::vector<std::uint32_t>>> uid_search(std::string_view criteria)
     {
+        co_return co_await uid_search(criteria, options_.max_search_results);
+    }
+
+    awaitable<result<std::vector<std::uint32_t>>> uid_search(std::string_view criteria, std::size_t max_results)
+    {
         mailxx::detail::async_mutex::scoped_lock guard;
         MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(criteria, "criteria"));
@@ -435,13 +492,29 @@ public:
         response resp;
         MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         std::vector<std::uint32_t> ids;
+        ids.reserve(max_results);
+        std::unordered_set<std::uint32_t> seen;
+        seen.reserve(max_results);
         for (const auto& line : resp.untagged_lines)
         {
-            auto parsed = parse_search_ids(line);
-            if (!parsed.empty())
-                ids.insert(ids.end(), parsed.begin(), parsed.end());
+            const auto parsed = parse_search_ids(line);
+            for (const std::uint32_t id : parsed)
+            {
+                if (ids.size() >= max_results)
+                {
+                    co_return mailxx::fail<std::vector<std::uint32_t>>(
+                        mailxx::errc::imap_parse_error,
+                        "IMAP UID search exceeds the caller maximum.");
+                }
+                if (!seen.insert(id).second)
+                {
+                    co_return mailxx::fail<std::vector<std::uint32_t>>(
+                        mailxx::errc::imap_parse_error,
+                        "IMAP UID search returned a duplicate.");
+                }
+                ids.push_back(id);
+            }
         }
-
         co_return mailxx::ok(std::move(ids));
     }
 
@@ -482,6 +555,240 @@ public:
         response resp;
         MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
         co_return mailxx::ok(select_fetch_literal(resp, "BODY["));
+    }
+
+    awaitable<result<std::string>> uid_fetch_body(std::uint32_t uid, std::string_view section,
+        body_span portion, std::size_t ceiling)
+    {
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(section, "section"));
+        if (section.find(']') != std::string_view::npos || section.find('<') != std::string_view::npos)
+        {
+            co_return mailxx::fail<std::string>(
+                mailxx::errc::imap_invalid_state,
+                "IMAP section is not a single body part.");
+        }
+        if (portion.length > ceiling || portion.length > options_.max_literal_size)
+        {
+            co_return mailxx::fail<std::string>(
+                mailxx::errc::imap_invalid_state,
+                "IMAP portion exceeds the caller ceiling.");
+        }
+
+        literal_guard_ = literal_expectation{static_cast<std::size_t>(portion.length), ceiling};
+        struct guard_reset
+        {
+            client* self = nullptr;
+            ~guard_reset()
+            {
+                if (self != nullptr)
+                    self->literal_guard_.reset();
+            }
+        } reset{this};
+
+        std::string cmd;
+        mailxx::detail::append_sv(cmd, "UID FETCH");
+        mailxx::detail::append_space(cmd);
+        mailxx::detail::append_uint(cmd, uid);
+        mailxx::detail::append_sv(cmd, " (BODY.PEEK[");
+        mailxx::detail::append_sv(cmd, section);
+        mailxx::detail::append_sv(cmd, "]<");
+        mailxx::detail::append_uint(cmd, portion.offset);
+        mailxx::detail::append_char(cmd, '.');
+        mailxx::detail::append_uint(cmd, portion.length);
+        mailxx::detail::append_sv(cmd, ">)");
+
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
+        if (resp.literals.size() != 1 || resp.literals.front().size() != portion.length)
+        {
+            co_return mailxx::fail<std::string>(
+                mailxx::errc::imap_parse_error,
+                "IMAP literal length differs from the requested portion.");
+        }
+        std::string body = std::move(resp.literals.front());
+        co_return mailxx::ok(std::move(body));
+    }
+
+    awaitable<result<flags_and_body>> uid_fetch_flags_and_body(std::uint32_t uid, std::string_view section,
+        body_span portion, std::size_t ceiling)
+    {
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(section, "section"));
+        if (section.find(']') != std::string_view::npos || section.find('<') != std::string_view::npos)
+        {
+            co_return mailxx::fail<flags_and_body>(
+                mailxx::errc::imap_invalid_state,
+                "IMAP section is not a single body part.");
+        }
+        if (portion.length > ceiling || portion.length > options_.max_literal_size)
+        {
+            co_return mailxx::fail<flags_and_body>(
+                mailxx::errc::imap_invalid_state,
+                "IMAP portion exceeds the caller ceiling.");
+        }
+
+        literal_guard_ = literal_expectation{static_cast<std::size_t>(portion.length), ceiling};
+        struct guard_reset
+        {
+            client* self = nullptr;
+            ~guard_reset()
+            {
+                if (self != nullptr)
+                    self->literal_guard_.reset();
+            }
+        } reset{this};
+
+        std::string cmd;
+        mailxx::detail::append_sv(cmd, "UID FETCH");
+        mailxx::detail::append_space(cmd);
+        mailxx::detail::append_uint(cmd, uid);
+        mailxx::detail::append_sv(cmd, " (FLAGS BODY.PEEK[");
+        mailxx::detail::append_sv(cmd, section);
+        mailxx::detail::append_sv(cmd, "]<");
+        mailxx::detail::append_uint(cmd, portion.offset);
+        mailxx::detail::append_char(cmd, '.');
+        mailxx::detail::append_uint(cmd, portion.length);
+        mailxx::detail::append_sv(cmd, ">)");
+
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
+        if (resp.literals.size() != 1 || resp.literals.front().size() != portion.length)
+        {
+            co_return mailxx::fail<flags_and_body>(
+                mailxx::errc::imap_parse_error,
+                "IMAP literal length differs from the requested portion.");
+        }
+        flags_and_body out;
+        out.body = std::move(resp.literals.front());
+        for (const auto& line : resp.untagged_lines)
+        {
+            auto parsed = parse_fetch_flags(line);
+            if (!parsed.empty())
+            {
+                out.flags = std::move(parsed);
+                break;
+            }
+        }
+        co_return mailxx::ok(std::move(out));
+    }
+
+    awaitable<result<response>> uid_move(std::uint32_t uid, std::string_view mailbox)
+    {
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
+        if (!has_capability("MOVE"))
+        {
+            co_return mailxx::fail<response>(
+                mailxx::errc::imap_invalid_state,
+                "MOVE is not advertised.");
+        }
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(mailbox, "mailbox"));
+        std::string box;
+        MAILXX_CO_TRY_ASSIGN(box, mailxx::imap::to_mailbox(mailbox));
+        std::string cmd;
+        mailxx::detail::append_sv(cmd, "UID MOVE");
+        mailxx::detail::append_space(cmd);
+        mailxx::detail::append_uint(cmd, uid);
+        mailxx::detail::append_space(cmd);
+        mailxx::detail::append_sv(cmd, box);
+        co_return co_await command_impl(cmd);
+    }
+
+    awaitable<result<response>> enable_capability(std::string_view capability)
+    {
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
+        if (!has_capability("ENABLE") || !has_capability(capability))
+        {
+            co_return mailxx::fail<response>(
+                mailxx::errc::imap_invalid_state,
+                "IMAP capability is not advertised.");
+        }
+        MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(capability, "capability"));
+        std::string cmd;
+        mailxx::detail::append_sv(cmd, "ENABLE");
+        mailxx::detail::append_space(cmd);
+        mailxx::detail::append_sv(cmd, capability);
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
+        if (resp.st == status::ok)
+            note_enabled(capability);
+        co_return mailxx::ok(std::move(resp));
+    }
+
+    awaitable<result<response>> enable_condstore()
+    {
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await enable_capability("CONDSTORE"));
+        co_return mailxx::ok(std::move(resp));
+    }
+
+    awaitable<result<response>> enable_qresync()
+    {
+        if (!condstore_enabled_)
+        {
+            response condstore;
+            MAILXX_CO_TRY_ASSIGN(condstore, co_await enable_capability("CONDSTORE"));
+            if (condstore.st != status::ok)
+                co_return mailxx::ok(std::move(condstore));
+        }
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await enable_capability("QRESYNC"));
+        co_return mailxx::ok(std::move(resp));
+    }
+
+    awaitable<result<response>> enable_utf8()
+    {
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await enable_capability("UTF8=ACCEPT"));
+        co_return mailxx::ok(std::move(resp));
+    }
+
+    awaitable<result<response>> compress_deflate()
+    {
+        mailxx::detail::async_mutex::scoped_lock guard;
+        MAILXX_CO_TRY_ASSIGN(guard, co_await mutex_.lock());
+        if (!has_capability("COMPRESS=DEFLATE"))
+        {
+            co_return mailxx::fail<response>(
+                mailxx::errc::imap_invalid_state,
+                "COMPRESS=DEFLATE is not advertised.");
+        }
+#if !defined(MAILXX_HAS_ZLIB)
+        co_return mailxx::fail<response>(
+            mailxx::errc::imap_invalid_state,
+            "DEFLATE layer is not linked.");
+#else
+        std::string cmd;
+        mailxx::detail::append_sv(cmd, "COMPRESS DEFLATE");
+        response resp;
+        MAILXX_CO_TRY_ASSIGN(resp, co_await command_impl(cmd));
+        if (resp.st != status::ok)
+            co_return mailxx::ok(std::move(resp));
+        dialog_type* dlg = nullptr;
+        MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
+        if (!dlg->stream().enable_deflate(options_.max_literal_size))
+        {
+            break_session();
+            co_return mailxx::fail<response>(
+                mailxx::errc::imap_invalid_state,
+                "DEFLATE layer failed to start.");
+        }
+        co_return mailxx::ok(std::move(resp));
+#endif
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t> highest_modseq() const
+    {
+        return highest_modseq_;
+    }
+
+    [[nodiscard]] bool utf8_accept_enabled() const
+    {
+        return utf8_accept_;
     }
 
     awaitable<result<response>> fetch(std::string_view seq_set, std::string_view items, bool uid = false)
@@ -762,11 +1069,38 @@ private:
             co_return mailxx::fail<void>(mailxx::error_from_asio(resolve_ec, mailxx::net::io_stage::resolve));
 
         mailxx::net::upgradable_stream stream(executor_);
-        auto [connect_ec, endpoint] =
-            co_await async_connect(stream.lowest_layer(), endpoints, mailxx::asio::use_nothrow_awaitable);
-        (void)endpoint;
+        mailxx::asio::error_code connect_ec;
+        if (options_.require_loopback)
+        {
+            const auto loopback = mailxx::net::loopback_endpoints(endpoints);
+            if (loopback.empty())
+                co_return mailxx::fail<void>(mailxx::errc::net_connect_failed, "Loopback address required.", host);
+            auto [ec, endpoint] =
+                co_await async_connect(stream.lowest_layer(), loopback, mailxx::asio::use_nothrow_awaitable);
+            connect_ec = ec;
+            (void)endpoint;
+        }
+        else
+        {
+            auto [ec, endpoint] =
+                co_await async_connect(stream.lowest_layer(), endpoints, mailxx::asio::use_nothrow_awaitable);
+            connect_ec = ec;
+            (void)endpoint;
+        }
         if (connect_ec)
             co_return mailxx::fail<void>(mailxx::error_from_asio(connect_ec, mailxx::net::io_stage::connect));
+
+        if (options_.require_loopback)
+        {
+            mailxx::asio::error_code remote_ec;
+            const auto remote = stream.lowest_layer().remote_endpoint(remote_ec);
+            if (remote_ec || !mailxx::net::is_loopback_address(remote.address()))
+            {
+                mailxx::asio::error_code close_ec;
+                stream.lowest_layer().close(close_ec);
+                co_return mailxx::fail<void>(mailxx::errc::net_connect_failed, "Loopback address required.", host);
+            }
+        }
 
         if (mode == mailxx::net::tls_mode::implicit)
         {
@@ -780,9 +1114,14 @@ private:
             MAILXX_TRY_CO_AWAIT(start_tls_stream(stream, *tls_ctx, std::move(resolved_sni)));
         }
 
-        dialog_.emplace(std::move(stream), options_.max_line_length, options_.timeout);
+        if (options_.timeout)
+            options_.timeouts.default_timeout = *options_.timeout;
+        dialog_.emplace(std::move(stream), options_.max_line_length, options_.timeouts.get_greeting());
         configure_trace();
         tag_counter_ = 0;
+        session_broken_ = false;
+        uid_validity_.reset();
+        literal_guard_.reset();
         reset_capabilities();
 
         if (mode == mailxx::net::tls_mode::starttls && options_.auto_starttls)
@@ -824,12 +1163,14 @@ private:
         MAILXX_CO_TRY_ASSIGN(user, mailxx::imap::to_astring(username));
         std::string pass;
         MAILXX_CO_TRY_ASSIGN(pass, mailxx::imap::to_astring(password));
+        mailxx::detail::secret_guard wipe_pass(&pass);
         std::string cmd;
         mailxx::detail::append_sv(cmd, "LOGIN");
         mailxx::detail::append_space(cmd);
         mailxx::detail::append_sv(cmd, user);
         mailxx::detail::append_space(cmd);
         mailxx::detail::append_sv(cmd, pass);
+        mailxx::detail::secret_guard wipe_cmd(&cmd);
         co_return co_await command_impl(cmd);
     }
 
@@ -962,7 +1303,25 @@ private:
 
     awaitable<result<response>> command_impl(std::string_view cmd)
     {
+        if (session_broken_)
+        {
+            co_return mailxx::fail<response>(
+                mailxx::errc::imap_invalid_state,
+                "IMAP session is closed.");
+        }
         MAILXX_CO_TRY_VOID(mailxx::detail::ensure_no_crlf_or_nul(cmd, "command"));
+        if (options_.timeout)
+            options_.timeouts.default_timeout = *options_.timeout;
+        if (dialog_)
+        {
+            const bool auth = cmd.starts_with("LOGIN") || cmd.starts_with("AUTHENTICATE");
+            if (auth)
+                dialog_->timeout(options_.timeouts.get_auth());
+            else if (cmd.starts_with("STARTTLS"))
+                dialog_->timeout(options_.timeouts.get_starttls());
+            else
+                dialog_->timeout(options_.timeouts.get_command());
+        }
 
         std::string tag = std::to_string(++tag_counter_);
 
@@ -972,6 +1331,7 @@ private:
             mailxx::detail::append_space(line);
             mailxx::detail::append_sv(line, cmd);
         }
+        mailxx::detail::secret_guard wipe_line(&line);
 
         dialog_type* dlg = nullptr;
         MAILXX_CO_TRY_ASSIGN(dlg, dialog_ptr());
@@ -979,6 +1339,8 @@ private:
         MAILXX_TRY_CO_AWAIT(dlg->write_line_view_r(line_view));
         response resp;
         MAILXX_CO_TRY_ASSIGN(resp, co_await read_response_impl(*dlg, tag, cmd));
+        MAILXX_CO_TRY_VOID(note_uid_validity(resp));
+        note_modseq(resp);
         co_return finalize_response(std::move(resp), cmd);
     }
 
@@ -1463,7 +1825,29 @@ private:
                 resp);
         }
 
-        if (parsed.size > options_.max_literal_size)
+        if (literal_guard_)
+        {
+            const std::size_t ceiling = literal_guard_->ceiling;
+            if (parsed.size > ceiling || parsed.size > options_.max_literal_size)
+            {
+                break_session();
+                auto detail = imap_detail(tag, command, line, resp.untagged_lines.size(), resp.literals.size());
+                detail.add_int("literal_size", static_cast<std::uint64_t>(parsed.size));
+                detail.add_int("literal_ceiling", static_cast<std::uint64_t>(ceiling));
+                co_return mailxx::fail_void(
+                    map_imap_error(error_kind::parse),
+                    "IMAP literal exceeds caller ceiling.",
+                    std::move(detail));
+            }
+            if (parsed.size != literal_guard_->length)
+            {
+                std::string discarded;
+                MAILXX_CO_TRY_ASSIGN(discarded, co_await dlg.read_exactly_r(parsed.size));
+                mailxx::detail::secure_clear(discarded);
+                co_return mailxx::ok();
+            }
+        }
+        else if (parsed.size > options_.max_literal_size)
         {
             auto detail = imap_detail(tag, command, line, resp.untagged_lines.size(), resp.literals.size());
             detail.add_int("literal_size", static_cast<std::uint64_t>(parsed.size));
@@ -1875,6 +2259,62 @@ private:
         return auth_method::login;
     }
 
+    bool has_capability(std::string_view name) const
+    {
+        if (!capabilities_known_)
+            return false;
+        const std::string key = to_upper_ascii(name);
+        for (const auto& token : capabilities_.raw_tokens)
+        {
+            if (token == key)
+                return true;
+        }
+        return false;
+    }
+
+    void note_enabled(std::string_view capability)
+    {
+        if (to_upper_ascii(capability) == "CONDSTORE")
+            condstore_enabled_ = true;
+        else if (to_upper_ascii(capability) == "QRESYNC")
+        {
+            condstore_enabled_ = true;
+            qresync_enabled_ = true;
+        }
+        else if (to_upper_ascii(capability) == "UTF8=ACCEPT")
+            utf8_accept_ = true;
+    }
+
+    void note_modseq(const response& resp)
+    {
+        auto scan = [this](std::string_view line)
+        {
+            constexpr std::string_view key = "HIGHESTMODSEQ";
+            const auto pos = line.find(key);
+            if (pos == std::string_view::npos)
+                return;
+            std::string_view rest = line.substr(pos + key.size());
+            while (!rest.empty() && (rest.front() == ' ' || rest.front() == ']'))
+                rest.remove_prefix(1);
+            std::uint64_t value = 0;
+            bool any = false;
+            for (const char ch : rest)
+            {
+                if (ch < '0' || ch > '9')
+                    break;
+                any = true;
+                value = value * 10u + static_cast<std::uint64_t>(ch - '0');
+            }
+            if (any)
+                highest_modseq_ = value;
+        };
+        for (const auto& line : resp.untagged_lines)
+            scan(line);
+        for (const auto& line : resp.tagged_lines)
+            scan(line);
+        scan(resp.text);
+    }
+
     bool has_auth_mechanism(std::string_view mechanism) const
     {
         const std::string key = to_upper_ascii(mechanism);
@@ -1974,14 +2414,66 @@ private:
         return token;
     }
 
+    struct literal_expectation
+    {
+        std::size_t length = 0;
+        std::size_t ceiling = 0;
+    };
+
+    result_void note_uid_validity(const response& resp)
+    {
+        std::optional<std::uint32_t> announced;
+        for (const auto& line : resp.untagged_lines)
+        {
+            std::uint32_t value = 0;
+            if (!parse_uidvalidity(line, value))
+                continue;
+            if (announced && *announced != value)
+            {
+                return mailxx::fail<void>(
+                    mailxx::errc::imap_invalid_state,
+                    "IMAP UIDVALIDITY conflict.");
+            }
+            announced = value;
+        }
+        if (!announced)
+            return mailxx::ok();
+        if (uid_validity_ && *uid_validity_ != *announced)
+        {
+            return mailxx::fail<void>(
+                mailxx::errc::imap_invalid_state,
+                "IMAP UIDVALIDITY changed.");
+        }
+        if (!uid_validity_)
+            uid_validity_ = announced;
+        return mailxx::ok();
+    }
+
+    void break_session()
+    {
+        session_broken_ = true;
+        if (!dialog_)
+            return;
+        mailxx::asio::error_code ec;
+        dialog_->stream().lowest_layer().close(ec);
+        dialog_.reset();
+    }
+
     executor_type executor_;
     options options_;
     mailxx::detail::async_mutex mutex_;
     std::optional<dialog_type> dialog_;
     std::string remote_host_;
     std::uint64_t tag_counter_{0};
+    bool session_broken_{false};
+    std::optional<std::uint32_t> uid_validity_;
+    std::optional<literal_expectation> literal_guard_;
     capabilities_cache capabilities_;
     bool capabilities_known_{false};
+    bool condstore_enabled_{false};
+    bool qresync_enabled_{false};
+    bool utf8_accept_{false};
+    std::optional<std::uint64_t> highest_modseq_;
     std::optional<bool> literal_plus_;
 
     void update_literal_plus(const response& resp)

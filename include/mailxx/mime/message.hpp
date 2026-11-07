@@ -67,6 +67,12 @@ struct message_format_options_t
     Flag whether bcc addresses should be added.
     **/
     bool add_bcc_header = false;
+
+    /**
+    Refuse a missing caller-supplied date and, once the message is multipart, a missing boundary.
+    The same inputs then produce the same octets. The clock and the boundary generator are not used.
+    **/
+    bool stable = false;
 };
 
 
@@ -505,18 +511,17 @@ public:
     @param att_strm      Stream to write the attachment.
     @param att_name      Name of the attachment.
     @return              Success or error.
-    @todo                The attachment name should be also `string_t`.
+    The attachment name is a `string_t`, including its charset.
     **/
     result_void attachment(std::size_t index, std::ostream& att_strm, string_t& att_name) const;
 
     /**
     Adding another header.
 
-    Adding a header defined by other methods leads to the undefined behaviour.
+    From, To, Subject, Date, and the other headers owned by a dedicated method are refused.
 
     @param name  Header name.
     @param value Header value.
-    @todo        Disallowing standard headers defined elsewhere?
     **/
 
     result_void add_header(const std::string& name, const std::string& value);
@@ -524,7 +529,7 @@ public:
     /**
     Removing another header.
 
-    Removing a header defined by other methods leads to the undefined behaviour.
+    Removes a header stored through `add_header`. A header owned by a dedicated method stays.
 
     @param name Header to remove.
     **/
@@ -709,14 +714,13 @@ protected:
     parse_subject(const std::string& subject);
 
     /**
-    Parsing a name part of a mail ASCII or UTF-8 encoded.
+    Parsing a display name.
 
-    The result is string ASCII or UTF-8 encoded. If another encoding is used, then it should be decoded by the method caller.
+    A charset other than US-ASCII or UTF-8 is kept when the encoded word is valid.
+    In strict mode an invalid Q word or an unreadable charset is a parse error.
 
     @param address_name  Name part of mail.
     @return              Parsed name part of the address or error.
-    @todo                Not tested with charsets different than ASCII and UTF-8.
-    @todo                Return a parse error when the Q codec is invalid?
     **/
     result<string_t> parse_address_name(const std::string& address_name);
 
@@ -783,6 +787,12 @@ protected:
     std::chrono::zoned_time<std::chrono::seconds> date_time_;
 
     /**
+    True after the caller or a parsed Date header supplies the date.
+    The constructor's clock value does not count.
+    **/
+    bool date_assigned_{false};
+
+    /**
     Other headers not included into the known ones.
     **/
     headers_t headers_;
@@ -803,6 +813,15 @@ inline message::message() : mime(), date_time_(std::chrono::current_zone(),
 
 result_void inline message::format_to(detail::output_sink& sink, const message_format_options_t& opts) const
 {
+    if (opts.stable)
+    {
+        if (!date_assigned_)
+            return fail_void(errc::mime_parse_error, "Stable format requires a date.", "");
+        const bool multipart = content_type_.media_type() == media_type_t::MULTIPART || !parts_.empty();
+        if (multipart && content_type_.boundary().empty())
+            return fail_void(errc::mime_parse_error, "Stable format requires a boundary.", "");
+    }
+
     std::string header;
     MAILXX_TRY_ASSIGN(header, format_header(opts.add_bcc_header));
     sink.write(header);
@@ -848,6 +867,16 @@ result_void inline message::format_to(detail::output_sink& sink, const message_f
 
 result_void inline message::format(std::string& message_str, const message_format_options_t& opts) const
 {
+    if (opts.stable)
+    {
+        std::size_t hint = 512 + content_.size() + (content_.size() / 3) * 4;
+        for (const auto& part : parts_)
+        {
+            const auto bytes = part.content().size();
+            hint += 160 + bytes + (bytes / 3) * 4;
+        }
+        message_str.reserve(message_str.size() + hint);
+    }
     detail::string_sink sink(message_str);
     return format_to(sink, opts);
 }
@@ -907,7 +936,7 @@ result_void inline message::parse(const std::string& message_str, bool dot_escap
 #if defined(__cpp_char8_t)
 result_void inline message::parse(const std::u8string& message_str, bool dot_escape)
 {
-    return parse(reinterpret_cast<const char*>(message_str.c_str()), dot_escape);
+    return parse(std::string(reinterpret_cast<const char*>(message_str.data()), message_str.size()), dot_escape);
 }
 #endif
 
@@ -1150,7 +1179,7 @@ void inline message::subject_raw(const string_t& mail_subject)
 
 void inline message::subject(const std::u8string& mail_subject, codec::codec_t sub_codec)
 {
-    subject_.buffer = std::string(reinterpret_cast<const char*>(mail_subject.c_str()));
+    subject_.buffer.assign(reinterpret_cast<const char*>(mail_subject.data()), mail_subject.size());
     subject_.charset = codec::CHARSET_UTF8;
     subject_.codec_type = sub_codec;
 }
@@ -1158,7 +1187,7 @@ void inline message::subject(const std::u8string& mail_subject, codec::codec_t s
 
 void inline message::subject_raw(const u8string_t& mail_subject)
 {
-    subject_.buffer = std::string(reinterpret_cast<const char*>(mail_subject.buffer.c_str()));
+    subject_.buffer.assign(reinterpret_cast<const char*>(mail_subject.buffer.data()), mail_subject.buffer.size());
     subject_.charset = mail_subject.charset;
     subject_.codec_type = mail_subject.codec_type;
 }
@@ -1186,6 +1215,7 @@ std::chrono::zoned_time<std::chrono::seconds> inline message::date_time() const
 void inline message::date_time(const std::chrono::zoned_time<std::chrono::seconds>& mail_dt)
 {
     date_time_ = mail_dt;
+    date_assigned_ = true;
 }
 
 
@@ -1351,6 +1381,18 @@ result_void inline message::add_header(const std::string& name, const std::strin
         return fail_void(errc::mime_parse_error, "Header name format error.", "Name is `" + name + "`.");
     if (!detail::is_valid_header_value(value))
         return fail_void(errc::mime_parse_error, "Header value Format error.", "Value is `" + value + "`.");
+
+    static constexpr std::string_view reserved[] = {
+        FROM_HEADER, SENDER_HEADER, REPLY_TO_HEADER, TO_HEADER, CC_HEADER, BCC_HEADER,
+        SUBJECT_HEADER, DATE_HEADER, MESSAGE_ID_HEADER, IN_REPLY_TO_HEADER, REFERENCES_HEADER,
+        MIME_VERSION_HEADER, "Content-Type", "Content-Transfer-Encoding", "Content-Disposition", "Content-ID"
+    };
+    for (const auto header : reserved)
+    {
+        if (detail::iequals_ascii(name, header))
+            return fail_void(errc::mime_parse_error, "Header is set by a dedicated API.", "Name is `" + name + "`.");
+    }
+
     headers_.insert(std::make_pair(name, value));
     return ok();
 }
@@ -1712,6 +1754,7 @@ result_void inline message::parse_header_line(const std::string& header_line)
                     return ok();
                 }
                 date_time_ = std::move(*date_res);
+                date_assigned_ = true;
             }
         }
         else if (detail::iequals_ascii(header_name, MIME_VERSION_HEADER))
@@ -1837,8 +1880,8 @@ result<std::string> inline message::format_address(const string_t& name, const s
     }
     else if (name.codec_type == codec::codec_t::BASE64 || name.codec_type == codec::codec_t::QUOTED_PRINTABLE)
     {
-        q_codec qc(line_policy - HEADER_LEN, static_cast<std::string::size_type>(line_policy_));
-        auto enc = qc.encode(name.buffer, name.charset, name.codec_type);
+        q_codec qc(line_policy, line_policy);
+        auto enc = qc.encode(name.buffer, name.charset, name.codec_type, HEADER_LEN);
         if (!enc)
             return fail<std::string>(std::move(enc).error());
         name_formatted = std::move(*enc);
@@ -1867,18 +1910,22 @@ result<std::string> inline message::format_address(const string_t& name, const s
         }
     }
 
-    std::string::size_type last_line_len = (name_formatted.empty() ? 0 : name_formatted.back().length());
+    const bool name_folded = name_formatted.size() > 1;
+    const std::string::size_type line_prefix = name_folded ? NEW_LINE_INDENT.size() : HEADER_LEN;
+    const std::string::size_type last_line_len = name_formatted.empty() ? 0 : name_formatted.back().length();
     std::string name_addr;
     for (auto sit = name_formatted.begin(); sit != name_formatted.end(); sit++)
-        name_addr += (sit == name_formatted.begin() ? "" : codec::SPACE_STR + codec::SPACE_STR) +
+        name_addr += (sit == name_formatted.begin() ? "" : NEW_LINE_INDENT) +
             *sit + (sit == name_formatted.end() - 1 ? "" : codec::END_OF_LINE);
 
     if (!addr.empty())
     {
-        if (last_line_len + addr.length() < line_policy)
-            name_addr += (name_formatted.empty() ? "" : codec::SPACE_STR) + addr;
+        if (name_formatted.empty())
+            name_addr += addr;
+        else if (line_prefix + last_line_len + 1 + addr.length() <= line_policy)
+            name_addr += codec::SPACE_STR + addr;
         else
-            name_addr += codec::END_OF_LINE + codec::SPACE_STR + codec::SPACE_STR + addr;
+            name_addr += codec::END_OF_LINE + NEW_LINE_INDENT + addr;
     }
 
     return ok(std::move(name_addr));
@@ -1913,8 +1960,10 @@ result<std::string> inline message::format_subject() const
     }
     else if (subject_.codec_type == codec::codec_t::QUOTED_PRINTABLE || subject_.codec_type == codec::codec_t::BASE64)
     {
-        q_codec qc(line1_policy, line_policy);
-        auto hdr = qc.encode(subject_.buffer, subject_.charset, subject_.codec_type);
+        const std::string::size_type full_policy = static_cast<std::string::size_type>(line_policy_);
+        const std::string::size_type subject_prefix = SUBJECT_HEADER.length() + HEADER_SEPARATOR_STR.length();
+        q_codec qc(full_policy, full_policy);
+        auto hdr = qc.encode(subject_.buffer, subject_.charset, subject_.codec_type, subject_prefix);
         if (!hdr)
             return fail<std::string>(std::move(hdr).error());
         if (hdr->empty())

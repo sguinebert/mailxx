@@ -32,9 +32,8 @@ namespace mailxx
 /**
 Base class for codecs, contains various constants and miscellaneous functions for encoding/decoding purposes.
 
-@todo `encode()` and `decode()` as abstract methods?
-@todo Consider using std::vector<std::uint8_t> or std::byte for binary data instead of std::string.
-      This would provide better semantic clarity between text and binary data.
+`encode` and `decode` stay on each codec. They do not share one return type, so they are not virtual.
+Binary payloads stay in `std::string`, which already keeps an interior NUL.
 **/
 class MAILXX_EXPORT codec
 {
@@ -545,6 +544,7 @@ String<Buf, Char> operator+(const String<Buf, Char>& lhs, const String<Buf, Char
     String<Buf, Char> result;
     result.buffer = lhs.buffer + rhs.buffer;
     result.charset = lhs.charset;
+    result.codec_type = lhs.codec_type;
     return result;
 }
 
@@ -664,6 +664,7 @@ String<Buf, Char> operator+(const String<Buf, Char>& lhs, const std::string& rhs
     String<Buf, Char> result;
     result.buffer = lhs.buffer + rhs;
     result.charset = lhs.charset;
+    result.codec_type = lhs.codec_type;
     return result;
 }
 
@@ -785,6 +786,7 @@ String<Buf, Char> operator+(const String<Buf, Char>& lhs, const std::u8string& r
     String<Buf, Char> result;
     result.buffer = lhs.buffer + rhs;
     result.charset = lhs.charset;
+    result.codec_type = lhs.codec_type;
     return result;
 }
 

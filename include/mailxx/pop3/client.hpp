@@ -35,7 +35,9 @@ copy at https://opensource.org/licenses/MIT.
 #include <mailxx/detail/asio_decl.hpp>
 #include <mailxx/net/upgradable_stream.hpp>
 #include <mailxx/net/dialog.hpp>
+#include <mailxx/net/loopback.hpp>
 #include <mailxx/net/tls_mode.hpp>
+#include <mailxx/detail/secure_clear.hpp>
 #include <mailxx/mime/message.hpp>
 #include <mailxx/detail/append.hpp>
 #include <mailxx/detail/asio_error.hpp>
@@ -527,6 +529,19 @@ public:
         }
     }
 
+    [[nodiscard]] std::optional<std::array<std::uint8_t, 32>> peer_certificate_sha256() const
+    {
+        return dlg_.stream().peer_certificate_sha256();
+    }
+
+    void clear_secrets()
+    {
+        if (session_snapshot_.secret)
+            mailxx::detail::secure_clear(*session_snapshot_.secret);
+        session_snapshot_.secret.reset();
+        mailxx::detail::secure_clear(session_snapshot_.username);
+    }
+
 private:
     /// Check if an error indicates a connection error
     [[nodiscard]] static bool is_connection_error(const error_info& err) noexcept
@@ -748,9 +763,38 @@ private:
             mailxx::net::io_stage::resolve));
 
         mailxx::net::upgradable_stream stream(executor);
+        mailxx::asio::error_code connect_ec;
+        if (options_.require_loopback)
+        {
+            const auto loopback = mailxx::net::loopback_endpoints(endpoints);
+            if (loopback.empty())
+                co_return fail_void(map_pop3_error(error_kind::response),
+                    "Loopback address required.",
+                    make_pop3_detail("CONNECT", host));
+            auto connected = co_await async_connect(stream.lowest_layer(), loopback, use_nothrow_awaitable);
+            connect_ec = std::get<0>(connected);
+        }
+        else
+        {
+            auto connected = co_await async_connect(stream.lowest_layer(), endpoints, use_nothrow_awaitable);
+            connect_ec = std::get<0>(connected);
+        }
         MAILXX_CO_TRY_VOID(mailxx::to_result(
-            co_await async_connect(stream.lowest_layer(), endpoints, use_nothrow_awaitable),
+            std::tuple<mailxx::asio::error_code>{connect_ec},
             mailxx::net::io_stage::connect));
+        if (options_.require_loopback)
+        {
+            mailxx::asio::error_code remote_ec;
+            const auto remote = stream.lowest_layer().remote_endpoint(remote_ec);
+            if (remote_ec || !mailxx::net::is_loopback_address(remote.address()))
+            {
+                mailxx::asio::error_code close_ec;
+                stream.lowest_layer().close(close_ec);
+                co_return fail_void(map_pop3_error(error_kind::response),
+                    "Loopback address required.",
+                    make_pop3_detail("CONNECT", host));
+            }
+        }
         
         if (mode == mailxx::net::tls_mode::implicit)
         {
@@ -766,7 +810,9 @@ private:
                 co_return mailxx::fail<void>(std::move(tls_res).error());
         }
 
-        dlg_ = dialog_type(std::move(stream), options_.max_line_length, options_.timeout);
+        if (options_.timeout)
+            options_.timeouts.default_timeout = *options_.timeout;
+        dlg_ = dialog_type(std::move(stream), options_.max_line_length, options_.timeouts.get_greeting());
         configure_trace();
         state_ = state_t::CONNECTED;
 
@@ -1133,6 +1179,16 @@ private:
                 break;
             if (!line.empty() && line[0] == '.')
                 line.erase(0, 1);
+            const std::size_t incoming = line.size() + 2;
+            if (msg_str.size() > options_.max_message_size || incoming > options_.max_message_size - msg_str.size())
+            {
+                mailxx::asio::error_code close_ec;
+                dlg_.stream().lowest_layer().close(close_ec);
+                state_ = state_t::DISCONNECTED;
+                co_return fail<std::string>(map_pop3_error(error_kind::response),
+                    "POP3 message exceeds the caller maximum.",
+                    make_pop3_detail("RETR", "size"));
+            }
             msg_str += line + "\r\n";
         }
         co_return ok(msg_str);
@@ -1171,6 +1227,17 @@ private:
                 break;
             if (!line.empty() && line[0] == '.')
                 line.erase(0, 1);
+
+            const std::size_t incoming = line.size() + 2;
+            if (msg_str.size() > options_.max_message_size || incoming > options_.max_message_size - msg_str.size())
+            {
+                mailxx::asio::error_code close_ec;
+                dlg_.stream().lowest_layer().close(close_ec);
+                state_ = state_t::DISCONNECTED;
+                co_return fail<std::string>(map_pop3_error(error_kind::response),
+                    "POP3 message exceeds the caller maximum.",
+                    make_pop3_detail("RETR", "size"));
+            }
             
             msg_str += line + "\r\n";
             bytes_received += line.size() + 2; // +2 for CRLF
@@ -1307,6 +1374,7 @@ private:
     awaitable<result_void> send_command(Line&& command)
     {
         const std::string_view command_view(command);
+        arm_pop3_command(command_view);
         co_return co_await dlg_.write_line_view_r(command_view);
     }
 
@@ -1317,7 +1385,28 @@ private:
     {
         std::string owned(std::forward<String>(command));
         std::string_view command_view(owned);
+        arm_pop3_command(command_view);
         co_return co_await dlg_.write_line_view_r(command_view);
+    }
+
+    void arm_pop3_command(std::string_view command)
+    {
+        if (options_.timeout)
+            options_.timeouts.default_timeout = *options_.timeout;
+        auto starts = [&](std::string_view prefix)
+        {
+            return command.size() >= prefix.size() && command.substr(0, prefix.size()) == prefix;
+        };
+        if (starts("PASS") || starts("AUTH") || starts("APOP"))
+            dlg_.timeout(options_.timeouts.get_auth());
+        else if (starts("STLS"))
+            dlg_.timeout(options_.timeouts.get_starttls());
+        else if (starts("RETR"))
+            dlg_.timeout(options_.timeouts.get_data_transfer(options_.max_message_size));
+        else if (starts("QUIT"))
+            dlg_.timeout(options_.timeouts.get_quit());
+        else
+            dlg_.timeout(options_.timeouts.get_command());
     }
 
     awaitable<result<std::string>> read_ok_response(

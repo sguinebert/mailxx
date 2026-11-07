@@ -15,7 +15,6 @@ copy at https://opensource.org/licenses/MIT.
 
 #include <string>
 #include <vector>
-#include <sstream>
 #include <boost/algorithm/string/trim.hpp>
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/detail/result.hpp>
@@ -27,9 +26,9 @@ namespace mailxx
 
 
 /**
-Quoted Printable codec.
+Quoted Printable codec for message bodies.
 
-@todo Remove the Q codec flag.
+RFC 2047 Q encoding lives in `q_codec`.
 **/
 class MAILXX_EXPORT quoted_printable : public codec
 {
@@ -42,7 +41,7 @@ public:
     @param lines_policy Other lines policy than the first one to set.
     **/
     quoted_printable(std::string::size_type line1_policy, std::string::size_type lines_policy)
-        : codec(line1_policy, lines_policy), q_codec_mode_(false)
+        : codec(line1_policy, lines_policy)
     {
     }
 
@@ -70,11 +69,7 @@ public:
         std::vector<std::string> enc_text;
         std::string line;
         std::string::size_type line_len = 0;
-        // Soon as the first line is added, switch the policy to the other lines policy.
         std::string::size_type policy = line1_policy_;
-        std::stringstream strstream;
-        strstream << std::hex << static_cast<int>(QUESTION_MARK_CHAR);
-        const std::string QMARK_HEX = EQUAL_STR + strstream.str();
 
         auto add_new_line = [&enc_text, &line_len, &policy, this](std::string& line)
         {
@@ -86,24 +81,14 @@ public:
 
         for (auto ch = text.begin(); ch != text.end(); ch++)
         {
-            if (*ch > SPACE_CHAR && *ch <= TILDE_CHAR && *ch != EQUAL_CHAR && *ch != QUESTION_MARK_CHAR &&
-                (!q_codec_mode_ || *ch != UNDERSCORE_CHAR))
+            if (*ch > SPACE_CHAR && *ch <= TILDE_CHAR && *ch != EQUAL_CHAR && *ch != QUESTION_MARK_CHAR)
             {
-                // Add soft break when not q encoding.
                 if (line_len >= policy - 3)
                 {
-                    if (q_codec_mode_)
-                    {
-                        line += *ch;
-                        add_new_line(line);
-                    }
-                    else
-                    {
-                        line += EQUAL_CHAR;
-                        add_new_line(line);
-                        line += *ch;
-                        line_len++;
-                    }
+                    line += EQUAL_CHAR;
+                    add_new_line(line);
+                    line += *ch;
+                    line_len++;
                 }
                 else
                 {
@@ -113,92 +98,34 @@ public:
             }
             else if (*ch == SPACE_CHAR)
             {
-                // Add soft break after the current space character if not q encoding.
                 if (line_len >= policy - 4)
                 {
-                    if (q_codec_mode_)
-                    {
-                        line += UNDERSCORE_CHAR;
-                        line_len++;
-                    }
-                    else
-                    {
-                        line += SPACE_CHAR;
-                        line += EQUAL_CHAR;
-                        add_new_line(line);
-                    }
+                    line += SPACE_CHAR;
+                    line += EQUAL_CHAR;
+                    add_new_line(line);
                 }
-                // Add soft break before the current space character if not q encoding.
                 else if (line_len >= policy - 3)
                 {
-                    if (q_codec_mode_)
-                    {
-                        line += UNDERSCORE_CHAR;
-                        line_len++;
-                    }
-                    else
-                    {
-                        line += EQUAL_CHAR;
-                        enc_text.push_back(line);
-                        line.clear();
-                        line += SPACE_CHAR;
-                        line_len = 1;
-                        policy = lines_policy_;
-                    }
+                    line += EQUAL_CHAR;
+                    enc_text.push_back(line);
+                    line.clear();
+                    line += SPACE_CHAR;
+                    line_len = 1;
+                    policy = lines_policy_;
                 }
                 else
                 {
-                    if (q_codec_mode_)
-                        line += UNDERSCORE_CHAR;
-                    else
-                        line += SPACE_CHAR;
+                    line += SPACE_CHAR;
                     line_len++;
                 }
             }
             else if (*ch == QUESTION_MARK_CHAR)
             {
-                if (line_len >= policy - 2)
-                {
-                    if (q_codec_mode_)
-                    {
-                        enc_text.push_back(line);
-                        line.clear();
-                        line += QMARK_HEX;
-                        line_len = 3;
-                        policy = lines_policy_;
-                    }
-                    else
-                    {
-                        line += *ch;
-                        line_len++;
-                    }
-                }
-                else
-                {
-                    if (q_codec_mode_)
-                    {
-                        line += QMARK_HEX;
-                        line_len += 3;
-                    }
-                    else
-                    {
-                        line += *ch;
-                        line_len++;
-                    }
-
-                }
+                line += *ch;
+                line_len++;
             }
             else if (*ch == CR_CHAR)
             {
-                if (q_codec_mode_)
-                {
-                    std::string detail = "bad character `";
-                    detail += *ch;
-                    detail += "`";
-                    return fail<std::vector<std::string>>(errc::codec_invalid_input,
-                        "invalid quoted-printable input", std::move(detail));
-                }
-
                 if (ch + 1 == text.end() || (ch + 1 != text.end() && *(ch + 1) != LF_CHAR))
                     return fail<std::vector<std::string>>(errc::codec_invalid_input,
                         "invalid quoted-printable input", "bad CRLF sequence");
@@ -223,13 +150,12 @@ public:
 
                 if (line_len >= policy - 5)
                 {
-                    if (!q_codec_mode_) // Add soft break before the current character.
-                        line += EQUAL_CHAR;
+                    line += EQUAL_CHAR;
                     encode_char(*ch, line);
                 }
                 else
                 {
-                    // TODO: This encoding is same as in the lambda above.
+                    // The atom fits on this line, so the escape stays here.
                     line += EQUAL_CHAR;
                     line += HEX_DIGITS[((*ch >> 4) & 0x0F)];
                     line += HEX_DIGITS[(*ch & 0x0F)];
@@ -274,7 +200,7 @@ public:
 
                 if (*ch == EQUAL_CHAR)
                 {
-                    if ((ch + 1) == line.end() && !q_codec_mode_)
+                    if ((ch + 1) == line.end())
                     {
                         soft_break = true;
                         continue;
@@ -297,28 +223,15 @@ public:
                 }
                 else
                 {
-                    if (q_codec_mode_ && *ch == UNDERSCORE_CHAR)
-                        dec_text += SPACE_CHAR;
-                    else
-                        dec_text += *ch;
+                    dec_text += *ch;
                 }
             }
-            if (!soft_break && !q_codec_mode_)
+            if (!soft_break)
                 dec_text += END_OF_LINE;
         }
         boost::trim_right(dec_text);
 
         return ok(std::move(dec_text));
-    }
-
-    /**
-    Setting Q codec mode.
-
-    @param mode True to set, false to unset.
-    **/
-    void q_codec_mode(bool mode)
-    {
-        q_codec_mode_ = mode;
     }
 
 private:
@@ -333,11 +246,6 @@ private:
     {
         return ((ch >= SPACE_CHAR && ch <= TILDE_CHAR) || ch == '\t');
     }
-
-    /**
-    Flag for the Q codec mode.
-    **/
-    bool q_codec_mode_;
 };
 
 

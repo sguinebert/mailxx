@@ -1934,7 +1934,6 @@ Formatting a message with UTF-8 addresses by using Base64 Q codec.
 
 @pre  None.
 @post None.
-@todo The last line of the from header has the empty base64 name part.
 **/
 BOOST_AUTO_TEST_CASE(format_qb_sender)
 {
@@ -1955,6 +1954,21 @@ BOOST_AUTO_TEST_CASE(format_qb_sender)
 
     string msg_str;
     BOOST_REQUIRE(msg.format(msg_str));
+    BOOST_CHECK_MSG_EQ(msg_str, "From: =?UTF-8?B?bWFpbGlvIGxpYnJhcnkgZm9yIHdvcmtpbmcgd2l0aCBlbWFpbHMgaW4gdGhl?=\r\n"
+        "  =?UTF-8?B?IEMgcGx1cyBwbHVzIGxhbmd1YWdl?= <address@mailxx.dev>,\r\n"
+        "  =?UTF-8?B?U3lsdmFpbiBHdWluZWJlcnQ=?= <the_library@mailxx.dev>\r\n"
+        "Sender: mailxx <address@mailxx.dev>\r\n"
+        "To: mailxx library for working with emails in the C plus plus language \r\n"
+        "  version 2017 but also compatible with C plus plus 2020 and 2023\r\n"
+        "  <address@mailxx.dev>,\r\n"
+        "  =?UTF-8?B?U3lsdmFpbiBHdWluZWJlcnQ=?= <qwerty@gmail.com>,\r\n"
+        "  =?UTF-8?B?U3lsdmFpbiBHdWluZWJlcnQ=?= <asdfg@zoho.com>\r\n"
+        "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
+        "Subject: =?ASCII?B?Zm9ybWF0IHEgYmFzZTY0IHNlbmRlcg==?=\r\n"
+        "\r\n"
+        "test\r\n");
+    const string empty_encoded_word = std::string("=?UTF-8?B?") + "?=";
+    BOOST_CHECK(msg_str.find(empty_encoded_word) == string::npos);
     message parsed;
     BOOST_REQUIRE(parsed.parse(msg_str));
     BOOST_CHECK(parsed.from().addresses.size() == 2);
@@ -1988,8 +2002,8 @@ BOOST_AUTO_TEST_CASE(format_qq_sender)
 
     string msg_str;
     BOOST_REQUIRE(msg.format(msg_str));
-    BOOST_CHECK_MSG_EQ(msg_str, "From: =?UTF-8?Q?mailio_library_for_working_with_emails_in_the_C_plus_plus_l?=\r\n"
-        "  =?UTF-8?Q?anguage?= <address@mailxx.dev>\r\n"
+    BOOST_CHECK_MSG_EQ(msg_str, "From: =?UTF-8?Q?mailio_library_for_working_with_emails_in_the_C_plus_plus_la?=\r\n"
+        "  =?UTF-8?Q?nguage?= <address@mailxx.dev>\r\n"
         "To: mailxx library for working with emails in the C plus plus language \r\n"
         "  version 2017 but also compatible with C plus plus 2020 and 2023\r\n"
         "  <address@mailxx.dev>,\r\n"
@@ -2053,8 +2067,8 @@ BOOST_AUTO_TEST_CASE(format_qq_long_subject)
     BOOST_CHECK_MSG_EQ(msg_str, "From: mailxx <address@mailxx.dev>\r\n"
         "To: mailxx <address@mailxx.dev>\r\n"
         "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
-        "Subject: =?UTF-8?Q?Re:_Hello,_World!_Request_from_Example_Visitor_-_Sample?=\r\n"
-        "  =?UTF-8?Q?_Apartments?=\r\n"
+        "Subject: =?UTF-8?Q?Re:_Hello,_World!_Request_from_Example_Visitor_-_Sample_A?=\r\n"
+        "  =?UTF-8?Q?partments?=\r\n"
         "\r\n"
         "Hello, World!\r\n");
 }
@@ -2399,13 +2413,13 @@ BOOST_AUTO_TEST_CASE(format_message_id)
 
 
 /**
-Formatting long nessage and content IDs.
+Formatting a message and a content ID longer than the line policy.
 
-Showing the bug of not applying the line policy for the message ID.
+A single identifier is never cut inside the angle brackets. When it cannot
+fit on one line, formatting fails.
 
 @pre  None.
 @post None.
-@todo Change the criteria once the bug is fixed.
 **/
 BOOST_AUTO_TEST_CASE(format_long_message_id)
 {
@@ -2422,17 +2436,7 @@ BOOST_AUTO_TEST_CASE(format_long_message_id)
     BOOST_REQUIRE(msg.content_id("987654321987654321987654321987654321987654321987654321987654321987654321987654321@mailxx.dev"));
 
     string msg_str;
-    BOOST_REQUIRE(msg.format(msg_str));
-    BOOST_CHECK_MSG_EQ(msg_str, "From: mailxx <address@mailxx.dev>\r\n"
-        "To: mailxx <address@mailxx.dev>\r\n"
-        "Message-ID: <12345678901234567890123456789012345678901234567890123456789012345\r\n"
-        "  67890123456789012345678901234567890@mailxx.dev>\r\n"
-        "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
-        "Content-ID: <98765432198765432198765432198765432198765432198765432198765432198\r\n"
-        "  7654321987654321@mailxx.dev>\r\n"
-        "Subject: =?ASCII?Q?format_long_message_id?=\r\n"
-        "\r\n"
-        "Hello, World!\r\n");
+    BOOST_CHECK(!msg.format(msg_str));
 }
 
 
@@ -2568,19 +2572,19 @@ BOOST_AUTO_TEST_CASE(format_in_reply_to_folding)
     BOOST_REQUIRE(msg.add_in_reply_to("333@mailxx.dev"));
     BOOST_REQUIRE(msg.add_in_reply_to("44444444444444444444444444@mailxx.dev"));
     BOOST_REQUIRE(msg.add_in_reply_to("5555555555555555@mailxx.dev"));
-    BOOST_REQUIRE(msg.add_in_reply_to("66666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666@mailxx.dev"));
     string msg_str;
     BOOST_REQUIRE(msg.format(msg_str));
     BOOST_CHECK_MSG_EQ(msg_str, "From: mailxx <address@mailxx.dev>\r\n"
         "To: mailxx <address@mailxx.dev>\r\n"
-        "In-Reply-To: <1@mailxx.dev> <22@mailxx.dev> <333@mailxx.dev> \r\n"
-        "  <44444444444444444444444444@mailxx.dev> <5555555555555555@mailxx.dev> \r\n"
-        "  <66666666666666666666666666666666666666666666666666666666666666666666666666666\r\n"
-        "  666666666666666666666666666666@mailxx.dev>\r\n"
+        "In-Reply-To: <1@mailxx.dev> <22@mailxx.dev> <333@mailxx.dev>\r\n"
+        "  <44444444444444444444444444@mailxx.dev> <5555555555555555@mailxx.dev>\r\n"
         "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
         "Subject: =?ASCII?Q?format_in_reply_to_folding?=\r\n"
         "\r\n"
         "Hello, World!\r\n");
+
+    BOOST_REQUIRE(msg.add_in_reply_to("66666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666@mailxx.dev"));
+    BOOST_CHECK(!msg.format(msg_str));
 }
 
 
@@ -2589,7 +2593,6 @@ Formatting oversized recipient with the recommended line policy.
 
 @pre  None.
 @post None.
-@todo Shows the bug with no delimiter between the name and the address.
 **/
 BOOST_AUTO_TEST_CASE(format_recommended_recipient)
 {
@@ -2606,6 +2609,14 @@ BOOST_AUTO_TEST_CASE(format_recommended_recipient)
 
     string msg_str;
     BOOST_REQUIRE(msg.format(msg_str));
+    BOOST_CHECK_MSG_EQ(msg_str, "From: =?UTF-8?B?bWFpbGlv?= <address@mailxx.dev>\r\n"
+        "To: mailxx <address@mailxx.dev>,\r\n"
+        "  =?UTF-8?B?U3lsdmFpbiBHdWluZWJlcnQ=?= <qwerty@gmail.com>,\r\n"
+        "  =?UTF-8?B?U3lsdmFpbiBHdWluZWJlcnQ=?= <asdfg@zoho.com>\r\n"
+        "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
+        "Subject: =?ASCII?B?Zm9ybWF0IHJlY29tbWVuZGVkIHJlY2lwaWVudA==?=\r\n"
+        "\r\n"
+        "test\r\n");
     message parsed;
     BOOST_REQUIRE(parsed.parse(msg_str));
     BOOST_CHECK(parsed.from().addresses.at(0).name == "mailio");
@@ -2749,7 +2760,6 @@ Formatting content type attributes.
 
 @pre  None.
 @post None.
-@todo Bug that shows that the content type is not formatted according to the line policy.
 **/
 BOOST_AUTO_TEST_CASE(format_content_type_attributes)
 {
@@ -2773,7 +2783,8 @@ BOOST_AUTO_TEST_CASE(format_content_type_attributes)
         "From: mailxx <address@mailxx.dev>\r\n"
         "To: mailxx <address@mailxx.dev>\r\n"
         "Date: Thu, 11 Feb 2016 22:56:22 +0000\r\n"
-        "Content-Type: text/calendar; charset=utf-8; format=flowed; method=request; name=PersoalBoardingCard.pdf\r\n"
+        "Content-Type: text/calendar; charset=utf-8; format=flowed; method=request; \r\n"
+        "  name=PersoalBoardingCard.pdf\r\n"
         "Subject: Hello,World!\r\n"
         "\r\n"
         "Hello, World!\r\n");
@@ -3561,8 +3572,8 @@ BOOST_AUTO_TEST_CASE(parse_continued_content_type)
         "Content-Type: multipart/related; boundary*0=\"my_boundary_which_is_\"; \r\n"
         "  boundary*1=\"very_long_id_and_should_test_the_continuation\";\r\n"
         "  boundary*2=\"_of_the_attribute_in_headers\"; \r\n"
-        "  name*1=\"veoma_dugachko_ime_za_zaglavlje_content_type_koje_ide_\"; \r\n"
-        "  name*2=\"u_dva_reda\"\r\n"
+        "  name*0=\"veoma_dugachko_ime_za_zaglavlje_content_type_koje_ide_\"; \r\n"
+        "  name*1=\"u_dva_reda\"\r\n"
         "To: address@mailxx.dev\r\n"
         "Subject: parse continued content type\r\n"
         "\r\n"
@@ -4673,7 +4684,6 @@ Parsing attachments with UTF-8 names.
 
 @pre  None.
 @post None.
-@todo Shows that the attachment name charset is not properly set.
 **/
 BOOST_AUTO_TEST_CASE(parse_attachment_utf8)
 {
@@ -5554,9 +5564,8 @@ BOOST_AUTO_TEST_CASE(parse_empty_header_strict)
 /**
 Parsing the empty header in the non-strict mode.
 
-@pre  None.
-@post None.
-@todo MSVC is not working well if headers are not copied, see below.
+The header map is copied before it is read. That copy is the stable way to
+inspect an empty value.
 **/
 BOOST_AUTO_TEST_CASE(parse_empty_header_relaxed)
 {

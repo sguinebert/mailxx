@@ -11,6 +11,9 @@ function(add_mailxx_tests SOURCE_FILE)
     endif()
     target_link_directories(${file_name} PUBLIC ${Boost_LIBRARY_DIRS})
     target_link_libraries(${file_name} PUBLIC ${Boost_LIBRARIES} mailxx ${CMAKE_THREAD_LIBS_INIT})
+    if(WIN32 AND file_name STREQUAL "test_dialog_extensions")
+        target_link_libraries(${file_name} PUBLIC mswsock)
+    endif()
     install(TARGETS ${file_name} DESTINATION "${SHARE_INSTALL_DIR}/${PROJECT_NAME}/test")
 
     # MinGW COFF string table can overflow with heavy coroutine symbols in Debug.

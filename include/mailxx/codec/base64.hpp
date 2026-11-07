@@ -24,6 +24,7 @@ copy at https://opensource.org/licenses/MIT.
 #include <cctype>
 #include <mailxx/codec/codec.hpp>
 #include <mailxx/detail/result.hpp>
+#include <mailxx/detail/secure_clear.hpp>
 #include <mailxx/config.hpp>
 
 
@@ -34,8 +35,8 @@ namespace mailxx
 /**
 Base64 codec.
 
-@todo Add static method `string encode(string)` to be used by `smtp`?
-@todo Does it need the first line policy?
+SMTP calls the instance `encode`. `line1_policy` is the budget of the first line.
+Later lines use `lines_policy`. A line longer than the policy is an error only in strict mode.
 **/
 class MAILXX_EXPORT base64 : public codec
 {
@@ -95,7 +96,8 @@ public:
 
         auto add_new_line = [&enc_text, &line_len, &policy, this](std::string& line)
         {
-            enc_text.push_back(line);
+            if (!line.empty())
+                enc_text.push_back(std::move(line));
             line.clear();
             line_len = 0;
             policy = lines_policy_;
@@ -171,6 +173,7 @@ public:
     {
         std::string input(text);
         std::vector<std::string> enc_text = encode(input);
+        mailxx::detail::secure_clear(input);
         return ok(join_lines(enc_text));
     }
 
@@ -179,7 +182,6 @@ public:
 
     @param text Vector of Base64 encoded strings.
     @return     Decoded string or error info.
-    @todo       Line policy not verified.
     **/
     [[nodiscard]] result<std::string> decode(const std::vector<std::string>& text) const
     {
@@ -195,8 +197,8 @@ public:
 
         for (const auto& line : text)
         {
-            if (line.length() > lines_policy_)
-                return fail_invalid("bad line policy");
+        if (strict_mode_ && line.length() > lines_policy_)
+            return fail_invalid("bad line policy");
 
             for (std::string::size_type ch = 0; ch < line.length() && line[ch] != EQUAL_CHAR; ch++)
             {

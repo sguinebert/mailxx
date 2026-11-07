@@ -19,6 +19,7 @@ copy at https://opensource.org/licenses/MIT.
 #include <string_view>
 #include <mailxx/codec/base64.hpp>
 #include <mailxx/detail/result.hpp>
+#include <mailxx/detail/secure_clear.hpp>
 
 namespace mailxx::detail
 {
@@ -76,8 +77,10 @@ inline result<std::string> encode_plain(std::string_view username, std::string_v
     plain += username;
     plain.push_back('\0');
     plain += password;
-    
-    return ::mailxx::detail::base64_encode_single_line(plain);
+
+    auto encoded = ::mailxx::detail::base64_encode_single_line(plain);
+    ::mailxx::detail::secure_clear(plain);
+    return encoded;
 }
 
 /**
@@ -110,8 +113,10 @@ inline result<std::string> encode_xoauth2(std::string_view username, std::string
     xoauth2 += "auth=Bearer ";
     xoauth2 += access_token;
     xoauth2 += "\x01\x01";
-    
-    return ::mailxx::detail::base64_encode_single_line(xoauth2);
+
+    auto encoded = ::mailxx::detail::base64_encode_single_line(xoauth2);
+    ::mailxx::detail::secure_clear(xoauth2);
+    return encoded;
 }
 
 /**
@@ -131,8 +136,10 @@ inline result<std::string> encode_oauthbearer(std::string_view username, std::st
     bearer += ",\x01auth=Bearer ";
     bearer += access_token;
     bearer += "\x01\x01";
-    
-    return ::mailxx::detail::base64_encode_single_line(bearer);
+
+    auto encoded = ::mailxx::detail::base64_encode_single_line(bearer);
+    ::mailxx::detail::secure_clear(bearer);
+    return encoded;
 }
 
 } // namespace mailxx::sasl

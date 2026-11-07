@@ -15,8 +15,6 @@ copy at https://opensource.org/licenses/MIT.
 
 #include <string>
 #include <vector>
-#include <sstream>
-#include <iomanip>
 #include <cctype>
 #include <boost/algorithm/string.hpp>
 #include <mailxx/codec/codec.hpp>
@@ -30,8 +28,6 @@ namespace mailxx
 
 /**
 Percent encoding and decoding as described in RFC 2231 section 4.
-
-@todo Line policies not implemented.
 **/
 class MAILXX_EXPORT percent : public codec
 {
@@ -64,45 +60,50 @@ public:
     /**
     Encoding a string.
 
-    @param txt String to encode.
-    @return    Encoded string.
-    @todo      Implement the line policies.
-    @todo      Replace `txt` to be `string_t`, then no need for the charset parameter.
+    The charset introducer is written on the first segment. A line break falls
+    between characters and never inside a `%HH` escape.
+
+    @param txt     String to encode.
+    @param charset Charset of the attribute value.
+    @return        Encoded segments, one per output line.
     **/
     std::vector<std::string> encode(const std::string& txt, const std::string& charset) const
     {
+        const std::string introducer = boost::to_upper_copy(charset) + ATTRIBUTE_CHARSET_SEPARATOR_STR +
+            ATTRIBUTE_CHARSET_SEPARATOR_STR;
         std::vector<std::string> enc_text;
-        std::string line;
-        std::string::size_type line_len = 0;
-        // Soon as the first line is added, switch the policy to the other lines policy.
-        std::string::size_type policy = line1_policy_;
+        std::string line = introducer;
+        std::string::size_type policy = line1_policy_ == 0 ? 1 : line1_policy_;
 
-        std::stringstream enc_line;
-        enc_line << boost::to_upper_copy(charset) + ATTRIBUTE_CHARSET_SEPARATOR_STR + ATTRIBUTE_CHARSET_SEPARATOR_STR;
-        for (std::string::const_iterator ch = txt.begin(); ch != txt.end(); ch++)
+        auto push_line = [&]()
         {
-            if (std::isalnum(static_cast<unsigned char>(*ch)))
-            {
-                enc_line << *ch;
-                line_len++;
-            }
+            if (!line.empty())
+                enc_text.push_back(std::move(line));
+            line.clear();
+            policy = lines_policy_ == 0 ? 1 : lines_policy_;
+        };
+
+        if (line.size() > policy)
+            push_line();
+
+        for (unsigned char ch : txt)
+        {
+            const bool literal = std::isalnum(ch) != 0;
+            const std::string::size_type need = literal ? 1 : 3;
+            if (!line.empty() && line.size() + need > policy)
+                push_line();
+
+            if (literal)
+                line.push_back(static_cast<char>(ch));
             else
             {
-                enc_line << codec::PERCENT_HEX_FLAG << std::setfill('0') << std::hex << std::uppercase << std::setw(2) <<
-                    static_cast<unsigned int>(static_cast<uint8_t>(*ch));
-                line_len += 3;
-            }
-
-            if (line_len >= policy - 3)
-            {
-                enc_text.push_back(enc_line.str());
-                enc_line.str("");
-                line_len = 0;
-                policy = lines_policy_;
+                line.push_back(PERCENT_HEX_FLAG);
+                line.push_back(HEX_DIGITS[(ch >> 4) & 0x0F]);
+                line.push_back(HEX_DIGITS[ch & 0x0F]);
             }
         }
-        enc_text.push_back(enc_line.str());
-
+        if (!line.empty())
+            enc_text.push_back(std::move(line));
         return enc_text;
     }
 
@@ -111,7 +112,6 @@ public:
 
     @param txt String to decode.
     @return    Decoded string.
-    @todo      Implement the line policies.
     **/
     result<std::string> decode(const std::string& txt) const
     {

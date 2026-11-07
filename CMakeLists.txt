@@ -54,6 +54,7 @@ option(mailxx_BUILD_TESTS "Turn on to build the tests." ON)
 option(mailxx_DYN_LINK_TESTS "Turn on to dynamically link the tests." OFF)
 option(mailxx_BUILD_MODULES "Turn on to build C++20 modules (EXPERIMENTAL, requires CMake 3.28+)." OFF)
 option(mailxx_BUILD_REALWORLD_CLI "Turn on to build the CLI11-based real-world validation tool." OFF)
+option(mailxx_BUILD_LAB_RECIPES "Turn on to build the opt-in Postfix and Dovecot lab recipes. They are not registered with ctest." OFF)
 
 option(BUILD_SHARED_LIBS "Turn on to build mailxx as a shared library. When off mailxx is build as a static library." ON)
 
@@ -136,6 +137,16 @@ target_link_libraries(${PROJECT_NAME} INTERFACE Boost::regex)
 
 find_package(Threads REQUIRED)
 target_link_libraries(${PROJECT_NAME} INTERFACE Threads::Threads)
+
+find_package(ZLIB QUIET)
+if(NOT ZLIB_FOUND AND EXISTS "C:/msys64/mingw64/include/zlib.h")
+    set(ZLIB_ROOT "C:/msys64/mingw64")
+    find_package(ZLIB QUIET)
+endif()
+if(ZLIB_FOUND)
+    target_compile_definitions(${PROJECT_NAME} INTERFACE MAILXX_HAS_ZLIB)
+    target_link_libraries(${PROJECT_NAME} INTERFACE ZLIB::ZLIB)
+endif()
 
 find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
@@ -268,9 +279,9 @@ if(${mailxx_BUILD_TESTS})
     install(FILES ${TXTS} DESTINATION "${SHARE_INSTALL_DIR}/${PROJECT_NAME}/test/")
 endif(${mailxx_BUILD_TESTS})
 
-if(${mailxx_BUILD_REALWORLD_CLI})
+if(${mailxx_BUILD_REALWORLD_CLI} OR ${mailxx_BUILD_LAB_RECIPES})
     add_subdirectory(tools)
-endif(${mailxx_BUILD_REALWORLD_CLI})
+endif()
 
 # optionally build C++20 modules (EXPERIMENTAL)
 if(${mailxx_BUILD_MODULES})

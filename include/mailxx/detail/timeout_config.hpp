@@ -29,9 +29,11 @@ using namespace std::chrono;
  * timeouts.connect = seconds(10);
  * timeouts.greeting = seconds(30);
  * timeouts.auth = seconds(60);
- * timeouts.data_per_kb = milliseconds(100);  // Scale with message size
- * 
- * smtp_client client(executor, timeouts);
+ * timeouts.data_per_kb = milliseconds(100);
+ *
+ * smtp::options options;
+ * options.timeouts = timeouts;
+ * options.timeout = timeouts.default_timeout;
  * @endcode
  */
 struct timeout_config

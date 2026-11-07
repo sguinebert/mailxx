@@ -70,15 +70,28 @@ public:
     /**
     Decoding a vector of binary encoded strings.
 
+    The CRLF between blocks is restored. No CRLF is appended after the last block:
+    a trailing CRLF belongs to the MIME frame, not to the body.
+
     @param text Vector of binary encoded strings.
     @return     Decoded string.
-    @todo       Line policy to be verified.
     **/
     std::string decode(const std::vector<std::string>& text) const
     {
-        std::string dec_text;
+        std::string::size_type total = 0;
         for (const auto& line : text)
-            dec_text += line + END_OF_LINE;
+            total += line.size();
+        if (text.size() > 1)
+            total += (text.size() - 1) * END_OF_LINE.size();
+
+        std::string dec_text;
+        dec_text.reserve(total);
+        for (std::size_t i = 0; i < text.size(); ++i)
+        {
+            if (i != 0)
+                dec_text += END_OF_LINE;
+            dec_text += text[i];
+        }
         return dec_text;
     }
 };

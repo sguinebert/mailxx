@@ -1,14 +1,17 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
-#include <map>
-#include <cstdint>
-#include <functional>
 #include <mailxx/detail/append.hpp>
 #include <mailxx/detail/result.hpp>
 #include <mailxx/detail/sanitize.hpp>
+#include <mailxx/detail/timeout_config.hpp>
 #include <mailxx/net/tls_options.hpp>
 
 namespace mailxx
@@ -76,6 +79,64 @@ private:
     }
 };
 
+enum class submission_state
+{
+    not_submitted,
+    queued,
+    rejected,
+    unknown
+};
+
+struct submission
+{
+    submission_state state = submission_state::not_submitted;
+    reply server;
+    std::string queue_id;
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return state == submission_state::queued;
+    }
+};
+
+[[nodiscard]] inline std::optional<std::string> queued_id(const reply& rep)
+{
+    if (rep.status != 250 || rep.lines.empty())
+        return std::nullopt;
+    constexpr std::string_view marker = " queued as ";
+    const std::string& line = rep.lines.back();
+    const auto pos = line.rfind(marker);
+    constexpr std::string_view enhanced = "2.0.0 Ok:";
+    if (pos == std::string::npos || pos < enhanced.size() || line.compare(0, enhanced.size(), enhanced) != 0)
+        return std::nullopt;
+    const std::string_view between(line.data() + enhanced.size(), pos - enhanced.size());
+    if (!between.empty())
+    {
+        if (between.front() != ' ')
+            return std::nullopt;
+        std::size_t index = 1;
+        if (index >= between.size() || between[index] < '0' || between[index] > '9')
+            return std::nullopt;
+        while (index < between.size() && between[index] >= '0' && between[index] <= '9')
+            ++index;
+        constexpr std::string_view bytes = " bytes";
+        if (between.substr(index) != bytes)
+            return std::nullopt;
+    }
+    const std::string_view id(line.data() + pos + marker.size(), line.size() - pos - marker.size());
+    if (id.empty() || id.size() > 32)
+        return std::nullopt;
+    for (unsigned char ch : id)
+    {
+        const bool alnum = (ch >= '0' && ch <= '9')
+            || (ch >= 'A' && ch <= 'Z')
+            || (ch >= 'a' && ch <= 'z');
+        if (!alnum)
+            return std::nullopt;
+    }
+    return std::string(id);
+}
+
 struct envelope
 {
     std::string mail_from;
@@ -94,6 +155,9 @@ struct options
     bool use_size_extension = true;
     bool use_smtputf8 = true;
     bool use_8bitmime = true;
+    std::optional<std::chrono::steady_clock::duration> timeout;
+    mailxx::timeout_config timeouts{};
+    bool require_loopback = false;
 };
 
 // ==================== DSN Types (RFC 3461) ====================

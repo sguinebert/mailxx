@@ -24,6 +24,8 @@ struct dummy_client
             *destroyed_ = true;
     }
 
+    void clear_secrets() {}
+
 private:
     bool* destroyed_{nullptr};
 };

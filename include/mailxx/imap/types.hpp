@@ -10,9 +10,11 @@
 #include <cstddef>
 #include <system_error>
 #include <mailxx/codec/codec.hpp>
+#include <mailxx/detail/secure_clear.hpp>
 #include <mailxx/detail/append.hpp>
 #include <mailxx/detail/result.hpp>
 #include <mailxx/detail/sanitize.hpp>
+#include <mailxx/detail/timeout_config.hpp>
 #include <mailxx/imap/utf7.hpp>
 #include <mailxx/net/dialog.hpp>
 #include <mailxx/net/tls_options.hpp>
@@ -43,6 +45,17 @@ struct credentials
 {
     std::string username;
     std::string secret; // password or bearer token
+
+    void clear() noexcept
+    {
+        mailxx::detail::secure_clear(secret);
+    }
+};
+
+struct body_span
+{
+    std::uint64_t offset = 0;
+    std::uint64_t length = 0;
 };
 
 [[nodiscard]] inline result<std::string> to_astring(std::string_view text)
@@ -67,6 +80,7 @@ struct mailbox_stat
     std::uint32_t unseen = 0;
     std::uint32_t uid_next = 0;
     std::uint32_t uid_validity = 0;
+    std::optional<std::uint64_t> highest_modseq;
 };
 
 struct mailbox_folder
@@ -290,11 +304,135 @@ struct response
     std::vector<std::string> literals;
 };
 
+enum class idle_event_kind
+{
+    exists,
+    expunge,
+    fetch,
+    other
+};
+
+struct idle_event
+{
+    idle_event_kind kind = idle_event_kind::other;
+    std::uint32_t number = 0;
+    std::string raw;
+};
+
+struct flags_and_body
+{
+    std::vector<std::string> flags;
+    std::string body;
+};
+
+[[nodiscard]] inline idle_event parse_idle_event(std::string_view line)
+{
+    idle_event event;
+    event.raw.assign(line.data(), line.size());
+    while (!line.empty() && line.front() == ' ')
+        line.remove_prefix(1);
+    if (!line.empty() && line.front() == '*')
+    {
+        line.remove_prefix(1);
+        while (!line.empty() && line.front() == ' ')
+            line.remove_prefix(1);
+    }
+    std::uint32_t number = 0;
+    bool any_digit = false;
+    std::size_t index = 0;
+    for (; index < line.size(); ++index)
+    {
+        const unsigned char ch = static_cast<unsigned char>(line[index]);
+        if (ch < '0' || ch > '9')
+            break;
+        any_digit = true;
+        number = number * 10u + static_cast<std::uint32_t>(ch - '0');
+    }
+    if (!any_digit)
+        return event;
+    event.number = number;
+    line.remove_prefix(index);
+    while (!line.empty() && line.front() == ' ')
+        line.remove_prefix(1);
+    std::size_t word_end = 0;
+    while (word_end < line.size() && line[word_end] != ' ')
+        ++word_end;
+    const std::string_view word = line.substr(0, word_end);
+    auto same = [](std::string_view text, std::string_view expected)
+    {
+        if (text.size() != expected.size())
+            return false;
+        for (std::size_t i = 0; i < text.size(); ++i)
+        {
+            const unsigned char a = static_cast<unsigned char>(text[i]);
+            const unsigned char b = static_cast<unsigned char>(expected[i]);
+            const unsigned char folded = (a >= 'a' && a <= 'z') ? static_cast<unsigned char>(a - 'a' + 'A') : a;
+            if (folded != b)
+                return false;
+        }
+        return true;
+    };
+    if (same(word, "EXISTS"))
+        event.kind = idle_event_kind::exists;
+    else if (same(word, "EXPUNGE"))
+        event.kind = idle_event_kind::expunge;
+    else if (same(word, "FETCH"))
+        event.kind = idle_event_kind::fetch;
+    return event;
+}
+
+[[nodiscard]] inline std::vector<std::string> parse_fetch_flags(std::string_view line)
+{
+    const auto flags_pos = line.find("FLAGS");
+    if (flags_pos == std::string_view::npos)
+        return {};
+    const auto open = line.find('(', flags_pos + 5);
+    if (open == std::string_view::npos)
+        return {};
+    int depth = 0;
+    std::size_t close = std::string_view::npos;
+    for (std::size_t i = open; i < line.size(); ++i)
+    {
+        if (line[i] == '(')
+            ++depth;
+        else if (line[i] == ')')
+        {
+            --depth;
+            if (depth == 0)
+            {
+                close = i;
+                break;
+            }
+        }
+    }
+    if (close == std::string_view::npos || close <= open)
+        return {};
+    std::string_view inner = line.substr(open + 1, close - open - 1);
+    std::vector<std::string> flags;
+    while (!inner.empty())
+    {
+        while (!inner.empty() && inner.front() == ' ')
+            inner.remove_prefix(1);
+        if (inner.empty())
+            break;
+        const auto space = inner.find(' ');
+        const std::string_view token = space == std::string_view::npos ? inner : inner.substr(0, space);
+        if (!token.empty())
+            flags.emplace_back(token);
+        if (space == std::string_view::npos)
+            break;
+        inner.remove_prefix(space + 1);
+    }
+    return flags;
+}
+
 struct options
 {
     std::size_t max_line_length = mailxx::net::DEFAULT_MAX_LINE_LENGTH;
     std::size_t max_literal_size = 64u * 1024u * 1024u;
+    std::size_t max_search_results = 10000;
     std::optional<std::chrono::steady_clock::duration> timeout = std::nullopt;
+    mailxx::timeout_config timeouts{};
     std::string default_sni;
     bool auto_starttls = false;
     bool allow_cleartext_auth = false;
@@ -302,6 +440,7 @@ struct options
     mailxx::net::tls_options tls;
     mailxx::net::tls_mode default_tls_mode = mailxx::net::tls_mode::none;
     bool redact_secrets_in_trace = true;
+    bool require_loopback = false;
 };
 
 } // namespace mailxx::imap

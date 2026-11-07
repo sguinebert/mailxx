@@ -19,6 +19,7 @@ copy at https://opensource.org/licenses/MIT.
 #endif
 
 #include <string>
+#include <string_view>
 #include <array>
 #include <cstddef>
 #include <utility>
@@ -98,7 +99,7 @@ public:
     /**
     Top level media types.
 
-    @todo Mixed subtype is missing.
+    `mixed` is a multipart subtype, not a value of this enumeration.
     **/
     enum class media_type_t {NONE, TEXT, IMAGE, AUDIO, VIDEO, APPLICATION, MULTIPART, MESSAGE};
 
@@ -236,14 +237,14 @@ public:
     /**
     Content transfer encodings.
 
-    @todo What is a differrence between ASCII and 7bit?
+    `7bit` is a content-transfer-encoding. US-ASCII is a charset.
     **/
     enum class content_transfer_encoding_t {NONE, BIT_7, BIT_8, BASE_64, QUOTED_PRINTABLE, BINARY};
 
     /**
     Content disposition.
 
-    @todo Content disposition should be struct to keep this enum and filename?
+    The disposition stays this enumeration. Filename parameters stay on the attribute map.
     **/
     enum class content_disposition_t {NONE, INLINE, ATTACHMENT};
 
@@ -316,9 +317,15 @@ public:
     @param mime_string String to parse.
     @param dot_escape  Flag if the leading dot should be escaped.
     @return            Result of parsing.
-    @todo              `std::string_view` instead of `string::substr()`.
     **/
     result_void parse(const std::string& mime_string, bool dot_escape = false);
+
+    /**
+    Parsing from a view of the caller buffer.
+
+    Lines are copied only when the parser keeps them: a folded header or a body line.
+    **/
+    result_void parse(std::string_view mime_string, bool dot_escape = false);
 
     /**
     Overload of `parse(const string&, bool)`.
@@ -343,9 +350,9 @@ public:
     @param line       String to be parsed. If it's CRLF, then message parsing ends; any further parsing is undefined.
     @param dot_escape Flag if the leading dot should be escaped.
     @return           Result of parsing.
-    @todo             Determine a default charset.
+    Unencoded text without a charset is US-ASCII.
     **/
-    result_void parse_by_line(const std::string& line, bool dot_escape = false);
+    result_void parse_by_line(std::string_view line, bool dot_escape = false);
 
     /**
     Setting the content type.
@@ -574,7 +581,7 @@ public:
     /**
     Adding another header.
 
-    Adding a header defined by other methods leads to the undefined behaviour.
+    The pair is stored as a custom header. A name that the formatter also emits can appear twice.
 
     @param name  Header name.
     @param value Header value.
@@ -584,7 +591,7 @@ public:
     /**
     Removing another header.
 
-    Removing a header defined by other methods leads to the undefined behaviour.
+    Removes a custom header of that name. A header owned by the formatter is left in place.
 
     @param name Header to remove.
     **/
@@ -894,7 +901,7 @@ protected:
     @param value      Header value parsed.
     @param attributes Header attributes parsed in the the key/value format.
     @return           Result of parsing.
-    @todo             Allowed characters are more strict than required?
+    A token stays bare. Any other value is quoted, and a non-ASCII charset uses RFC 2231.
     **/
     result_void parse_header_value_attributes(const std::string& header, std::string& value, attributes_t& attributes) const;
 
@@ -912,7 +919,7 @@ protected:
 
     @param attributes Attribute parameters where the merging is to be done.
     @return           Result of parsing.
-    @todo             There is no check for the second continuation indicator
+    Numbered parts must be exactly 0..n-1, and more than ten parts is an error.
     **/
     result_void merge_attributes(attributes_t& attributes) const;
 
@@ -922,7 +929,7 @@ protected:
     @param attr_value Attribute to decode.
     @return           Attribute decoded as string and its charset.
     @return           Result of decoding.
-    @todo             URL decoding into a separate function.
+    Percent decoding is performed by `codec::percent`.
     **/
     result<string_t> decode_value_attribute(const std::string& attr_value) const;
 
@@ -981,7 +988,7 @@ protected:
     /**
     Name of mime.
 
-    @todo Should it contain filename of the attachment?
+    This is the display name. The attachment filename is a separate `string_t`.
     **/
     string_t name_;
 
@@ -1011,7 +1018,7 @@ protected:
     The content is in the form as presented to the user, thus no limits such as line policy are applied here. For such purpose, the format method
     is used,
     
-    @todo Consider using std::vector<std::uint8_t> for binary content (attachments, encoded data).
+    Stored as `std::string`, which already keeps an interior NUL.
     **/
     std::string content_;
 

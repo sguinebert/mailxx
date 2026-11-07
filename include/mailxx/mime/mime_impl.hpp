@@ -235,32 +235,36 @@ inline result_void mime::format(std::string& mime_str, bool dot_escape) const
 #if defined(__cpp_char8_t)
 inline result_void mime::format(std::u8string& mime_str, bool dot_escape) const
 {
-    std::string ms = reinterpret_cast<const char*>(mime_str.c_str());
-    return format(ms, dot_escape);
+    std::string ms(reinterpret_cast<const char*>(mime_str.data()), mime_str.size());
+    MAILXX_TRY(format(ms, dot_escape));
+    mime_str.assign(reinterpret_cast<const char8_t*>(ms.data()), ms.size());
+    return ok();
 }
 #endif
 
 
 inline result_void mime::parse(const std::string& mime_string, bool dot_escape)
 {
-    std::string::size_type line_begin = 0;
-    std::string::size_type line_end = mime_string.find(codec::END_OF_LINE, line_begin);
-    std::string line;
-    while (line_end != std::string::npos)
+    return parse(std::string_view(mime_string), dot_escape);
+}
+
+
+inline result_void mime::parse(std::string_view mime_string, bool dot_escape)
+{
+    std::string_view::size_type line_begin = 0;
+    std::string_view::size_type line_end = mime_string.find(codec::END_OF_LINE, line_begin);
+    while (line_end != std::string_view::npos)
     {
-        line = mime_string.substr(line_begin, line_end - line_begin);
+        const auto line = mime_string.substr(line_begin, line_end - line_begin);
         MAILXX_TRY(parse_by_line(line, dot_escape));
-        if (line_end != std::string::npos)
-        {
-            line_end += codec::END_OF_LINE.length();
-            line_begin = line_end;
-        }
+        line_end += codec::END_OF_LINE.length();
+        line_begin = line_end;
         line_end = mime_string.find(codec::END_OF_LINE, line_begin);
     }
-    line = mime_string.substr(line_begin);
-    if (!line.empty())
-        MAILXX_TRY(parse_by_line(line, dot_escape));
-    MAILXX_TRY(parse_by_line(codec::END_OF_LINE, dot_escape));
+    const auto tail = mime_string.substr(line_begin);
+    if (!tail.empty())
+        MAILXX_TRY(parse_by_line(tail, dot_escape));
+    MAILXX_TRY(parse_by_line(std::string_view(codec::END_OF_LINE), dot_escape));
     return ok();
 }
 
@@ -268,15 +272,15 @@ inline result_void mime::parse(const std::string& mime_string, bool dot_escape)
 #if defined(__cpp_char8_t)
 inline result_void mime::parse(const std::u8string& mime_string, bool dot_escape)
 {
-    return parse(reinterpret_cast<const char*>(mime_string.c_str()), dot_escape);
+    return parse(std::string(reinterpret_cast<const char*>(mime_string.data()), mime_string.size()), dot_escape);
 }
 #endif
 
 
-inline result_void mime::parse_by_line(const std::string& line, bool dot_escape)
+inline result_void mime::parse_by_line(std::string_view line, bool dot_escape)
 {
     if (line.length() > std::string::size_type(line_policy_))
-        return fail_void(errc::mime_parse_error, "Line policy overflow in a header.", "Line is `" + line + "`.");
+        return fail_void(errc::mime_parse_error, "Line policy overflow in a header.", "Line is `" + std::string(line) + "`.");
 
     // mark end of header and parse it
     if (parsing_header_ && line.empty())
@@ -287,7 +291,7 @@ inline result_void mime::parse_by_line(const std::string& line, bool dot_escape)
     else
     {
         if (parsing_header_)
-            parsed_headers_.push_back(line);
+            parsed_headers_.emplace_back(line);
         else
         {
             // end of message reached, decode the body
@@ -327,10 +331,10 @@ inline result_void mime::parse_by_line(const std::string& line, bool dot_escape)
                     // put the line into `parsed_body_` until the whole body is read for parsing
                     else
                     {
-                        if (dot_escape && line[0] == codec::DOT_CHAR)
-                            parsed_body_.push_back(line.substr(1));
+                        if (dot_escape && !line.empty() && line[0] == codec::DOT_CHAR)
+                            parsed_body_.emplace_back(line.substr(1));
                         else
-                            parsed_body_.push_back(line);
+                            parsed_body_.emplace_back(line);
                     }
                 }
             }
@@ -452,7 +456,7 @@ inline void mime::content(const std::string& content_str)
 #if defined(__cpp_char8_t)
 inline void mime::content(const std::u8string& content_str)
 {
-    content_ = std::string(reinterpret_cast<const char*>(content_str.c_str()));
+    content_.assign(reinterpret_cast<const char*>(content_str.data()), content_str.size());
     attachment_source_.reset();
 }
 #endif
@@ -538,26 +542,56 @@ inline bool mime::strict_codec_mode() const
 
 inline result<std::string> mime::format_many_ids(const std::vector<std::string>& ids, const std::string& header_name) const
 {
-    std::string ids_str;
-    for (auto s = ids.begin(); s != ids.end(); s++)
-    {
-        ids_str += ADDRESS_BEGIN_STR + *s + ADDRESS_END_STR;
-        if (s != ids.end() - 1)
-            ids_str += codec::SPACE_STR;
-    }
-
-    std::string::size_type l1p = static_cast<std::string::size_type>(line_policy_) - header_name.length() - HEADER_SEPARATOR_STR.length();
-    bit7 b7(l1p, static_cast<std::string::size_type>(line_policy_));
-    auto ids_enc_res = b7.encode(ids_str);
-    if (!ids_enc_res)
-        return fail<std::string>(errc::mime_parse_error, "mime format error", detail::codec_error_message(ids_enc_res.error()));
-    std::vector<std::string> ids_enc = std::move(*ids_enc_res);
-    if (ids_enc.empty())
+    if (ids.empty())
         return fail<std::string>(errc::mime_parse_error, "Header value format error.",
             "Header is `" + header_name + "`.");
-    std::string ids_folded = ids_enc.at(0) + codec::END_OF_LINE;
-    ids_folded += fold_header_line(ids_enc);
-    return ok(std::move(ids_folded));
+
+    const auto limit = static_cast<std::string::size_type>(line_policy_);
+    const auto header_len = header_name.size() + HEADER_SEPARATOR_STR.size();
+    if (header_len >= limit || limit <= NEW_LINE_INDENT.size())
+        return fail<std::string>(errc::mime_parse_error, "Identifier exceeds the line policy.",
+            "Header is `" + header_name + "`.");
+
+    const auto continuation_room = limit - NEW_LINE_INDENT.size();
+    std::string folded;
+    std::string::size_type column = header_len;
+
+    for (const auto& id : ids)
+    {
+        const std::string token = ADDRESS_BEGIN_STR + id + ADDRESS_END_STR;
+        if (token.size() > continuation_room)
+            return fail<std::string>(errc::mime_parse_error, "Identifier exceeds the line policy.",
+                "Header is `" + header_name + "`.");
+
+        if (folded.empty())
+        {
+            if (header_len + token.size() <= limit)
+            {
+                folded = token;
+                column = header_len + token.size();
+            }
+            else
+            {
+                folded = codec::END_OF_LINE + NEW_LINE_INDENT + token;
+                column = NEW_LINE_INDENT.size() + token.size();
+            }
+            continue;
+        }
+
+        if (column + 1 + token.size() <= limit)
+        {
+            folded += codec::SPACE_STR + token;
+            column += 1 + token.size();
+        }
+        else
+        {
+            folded += codec::END_OF_LINE + NEW_LINE_INDENT + token;
+            column = NEW_LINE_INDENT.size() + token.size();
+        }
+    }
+
+    folded += codec::END_OF_LINE;
+    return ok(std::move(folded));
 }
 
 
@@ -633,10 +667,22 @@ inline result<std::string> mime::format_content(bool dot_escape) const
     {
         case content_transfer_encoding_t::BASE_64:
         {
-            base64 b(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
-            b.strict_mode(strict_codec_mode_);
-            content_lines = b.encode(content_);
-            break;
+            std::string encoded;
+            if (!content_.empty())
+            {
+                const auto encoded_size = ((content_.size() + 2) / 3) * 4;
+                const auto limit = static_cast<std::size_t>(line_policy_);
+                const auto line_chars = limit - (limit % 4);
+                const auto breaks = line_chars == 0 ? 0 : encoded_size / line_chars;
+                encoded.reserve(encoded_size + breaks * codec::END_OF_LINE.size() + codec::END_OF_LINE.size());
+                detail::string_sink sink(encoded);
+                base64_stream_encoder enc(limit, codec::END_OF_LINE);
+                const auto* data = reinterpret_cast<const std::byte*>(content_.data());
+                enc.update(std::span<const std::byte>(data, content_.size()), sink);
+                enc.finalize(sink);
+                encoded += codec::END_OF_LINE;
+            }
+            return ok(std::move(encoded));
         }
 
         case content_transfer_encoding_t::QUOTED_PRINTABLE:
@@ -650,7 +696,7 @@ inline result<std::string> mime::format_content(bool dot_escape) const
             break;
         }
 
-        // TODO: check how to handle 8bit chars, see [rfc 2045, section 2.8]
+        // Strict 8bit allows octets 128-255, rejects a NUL, and folds to the line policy.
         case content_transfer_encoding_t::BIT_8:
         {
             bit8 b8(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
@@ -662,7 +708,7 @@ inline result<std::string> mime::format_content(bool dot_escape) const
             break;
         }
 
-        // TODO: check again if handling non-7bit chars is okay, see [rfc 2045, section 2.7]
+        // Strict 7bit rejects an octet above 127 and a NUL. The default mode still accepts received mail.
         case content_transfer_encoding_t::BIT_7:
         case content_transfer_encoding_t::NONE:
         {
@@ -677,22 +723,38 @@ inline result<std::string> mime::format_content(bool dot_escape) const
 
         case content_transfer_encoding_t::BINARY:
         {
-            // TODO: probably bug when `\0` is part of the content
-            binary b(static_cast<std::string::size_type>(line_policy_), static_cast<std::string::size_type>(line_policy_));
-            b.strict_mode(strict_codec_mode_);
-            content_lines = b.encode(content_);
-            break;
+            std::string encoded;
+            encoded.reserve(content_.size());
+            if (!dot_escape)
+                return ok(content_);
+
+            for (std::size_t i = 0; i < content_.size(); ++i)
+            {
+                const bool at_line_start = (i == 0) ||
+                    (i >= codec::END_OF_LINE.size() &&
+                     content_.compare(i - codec::END_OF_LINE.size(), codec::END_OF_LINE.size(), codec::END_OF_LINE) == 0);
+                if (at_line_start && static_cast<unsigned char>(content_[i]) == static_cast<unsigned char>(codec::DOT_CHAR))
+                    encoded.push_back(codec::DOT_CHAR);
+                encoded.push_back(content_[i]);
+            }
+            return ok(std::move(encoded));
         }
 
         // default encoding is seven bit, so no `default` clause
     }
 
     std::string content;
+    std::size_t total = 0;
     for (const auto& s : content_lines)
-        if (dot_escape && s[0] == codec::DOT_CHAR)
-            content += std::string(1, codec::DOT_CHAR) + s + codec::END_OF_LINE;
-        else
-            content += s + codec::END_OF_LINE;
+        total += s.size() + codec::END_OF_LINE.size() + 1;
+    content.reserve(total);
+    for (const auto& s : content_lines)
+    {
+        if (dot_escape && !s.empty() && s[0] == codec::DOT_CHAR)
+            content.push_back(codec::DOT_CHAR);
+        content.append(s);
+        content.append(codec::END_OF_LINE);
+    }
 
     return ok(std::move(content));
 }
@@ -714,11 +776,61 @@ inline result<std::string> mime::format_content_type() const
 
     if (!line.empty())
     {
-        for(const auto& [attr_name, attr_val] : content_type_.attributes()){
-            if (attr_name == content_type_t::ATTR_BOUNDARY)
-                line += ATTRIBUTES_SEPARATOR_STR + attr_name + NAME_VALUE_SEPARATOR_STR + codec::QUOTE_CHAR + attr_val.buffer + codec::QUOTE_CHAR;
+        const auto limit = static_cast<std::string::size_type>(line_policy_);
+        auto column = [&line]() -> std::string::size_type
+        {
+            const auto pos = line.rfind('\n');
+            if (pos == std::string::npos)
+                return line.size();
+            return line.size() - pos - 1;
+        };
+        auto append_parameter = [&](const std::string& rendered)
+        {
+            const auto used = column();
+            const auto separator = ATTRIBUTES_SEPARATOR_STR.size();
+            if (used + separator + rendered.size() <= limit)
+                line += ATTRIBUTES_SEPARATOR_STR + rendered;
+            else if (used + separator <= limit)
+                line += ATTRIBUTES_SEPARATOR_STR + codec::END_OF_LINE + NEW_LINE_INDENT + rendered;
             else
-                line += ATTRIBUTES_SEPARATOR_STR + attr_name + NAME_VALUE_SEPARATOR_STR + attr_val.buffer;
+                line += codec::END_OF_LINE + NEW_LINE_INDENT + ATTRIBUTES_SEPARATOR_STR + rendered;
+        };
+
+        for (const auto& [attr_name, attr_val] : content_type_.attributes())
+        {
+            if (attr_name == content_type_t::ATTR_BOUNDARY)
+                append_parameter(attr_name + NAME_VALUE_SEPARATOR_STR + codec::QUOTE_CHAR + attr_val.buffer + codec::QUOTE_CHAR);
+            else
+            {
+                const bool ascii_charset = attr_val.charset.empty()
+                    || boost::iequals(attr_val.charset, codec::CHARSET_ASCII)
+                    || boost::iequals(attr_val.charset, "US-ASCII");
+                const bool token = std::all_of(attr_val.buffer.begin(), attr_val.buffer.end(), [](unsigned char ch)
+                {
+                    return std::isalnum(ch) || CONTENT_ATTR_ALPHABET.find(static_cast<char>(ch)) != std::string::npos;
+                });
+                if (!ascii_charset)
+                {
+                    percent pc(limit, limit);
+                    const auto parts = pc.encode(attr_val.buffer, attr_val.charset);
+                    if (parts.size() > 10)
+                        return fail<std::string>(errc::mime_parse_error, "mime format error", "Attribute needs more than 10 continuations.");
+                    if (parts.size() == 1)
+                        append_parameter(attr_name + ATTRIBUTE_CONTINUATION_INDICATOR + NAME_VALUE_SEPARATOR_STR + parts.front());
+                    else
+                    {
+                        for (std::size_t part_no = 0; part_no < parts.size(); ++part_no)
+                        {
+                            append_parameter(attr_name + ATTRIBUTE_CONTINUATION_INDICATOR + std::to_string(part_no)
+                                + ATTRIBUTE_CONTINUATION_INDICATOR + NAME_VALUE_SEPARATOR_STR + parts[part_no]);
+                        }
+                    }
+                }
+                else if (!token || attr_val.buffer.find(codec::QUOTE_CHAR) != std::string::npos)
+                    append_parameter(attr_name + NAME_VALUE_SEPARATOR_STR + codec::QUOTE_CHAR + attr_val.buffer + codec::QUOTE_CHAR);
+                else
+                    append_parameter(attr_name + NAME_VALUE_SEPARATOR_STR + attr_val.buffer);
+            }
         }
         if (!name_.buffer.empty())
         {
@@ -752,6 +864,10 @@ inline result<std::string> mime::format_transfer_encoding() const
 
         case content_transfer_encoding_t::BIT_7:
             line += CONTENT_TRANSFER_ENCODING_HEADER + HEADER_SEPARATOR_STR + CONTENT_TRANSFER_ENCODING_BIT7 + codec::END_OF_LINE;
+            break;
+
+        case content_transfer_encoding_t::BINARY:
+            line += CONTENT_TRANSFER_ENCODING_HEADER + HEADER_SEPARATOR_STR + CONTENT_TRANSFER_ENCODING_BINARY + codec::END_OF_LINE;
             break;
 
         // default is no transfer encoding specified
@@ -991,6 +1107,16 @@ inline result_void mime::parse_header_name_value(const std::string& header_line,
                 "Header line parsed is `" + header_line + "`.");
         else
             return ok();
+    }
+
+    if (strict_mode_)
+    {
+        for (unsigned char ch : header_value)
+        {
+            if (ch > 127)
+                return fail_void(errc::mime_parse_error, "Format failure of the header value",
+                    "Header value is `" + header_value + "`.");
+        }
     }
 
     if (!codec::is_utf8_string(header_value) && !detail::regex_match(header_value, m, HEADER_VALUE_REGEX))
@@ -1336,6 +1462,11 @@ inline result<std::string> mime::split_attributes(const std::string& attr_name, 
         return fail<std::string>(errc::mime_parse_error, "mime format error", "Attribute codec not supported.");
     }
 
+    // Attribute name can be at most 10 parts enumerated from 0 to 9.
+    const std::vector<std::string>::size_type MAX_PARTS = 10;
+    if (attr_parts.size() > MAX_PARTS)
+        return fail<std::string>(errc::mime_parse_error, "mime format error", "Attribute needs more than 10 continuations.");
+
     // Only one part means there is no continuation.
     if (attr_parts.size() == 1)
     {
@@ -1349,18 +1480,16 @@ inline result<std::string> mime::split_attributes(const std::string& attr_name, 
 
     // All parts as continuations.
 
-    const std::vector<std::string>::size_type MAX_PARTS = 10;
-    std::vector<std::string>::size_type total_parts = std::min(MAX_PARTS, attr_parts.size());
     std::vector<std::string>::size_type part_no = 0;
     std::string attrs;
-    for (part_no = 0; part_no < total_parts; part_no++)
+    for (part_no = 0; part_no < attr_parts.size(); part_no++)
     {
         attrs += NEW_LINE_INDENT + attr_name + ATTRIBUTE_CONTINUATION_INDICATOR + std::to_string(part_no);
         if (attr_value.codec_type == codec::codec_t::PERCENT)
             attrs += ATTRIBUTE_CONTINUATION_INDICATOR + codec::EQUAL_CHAR + attr_parts.at(part_no);
         else
             attrs += codec::EQUAL_CHAR + codec::QUOTE_STR + attr_parts.at(part_no) + codec::QUOTE_STR;
-        if (part_no != total_parts - 1)
+        if (part_no != attr_parts.size() - 1)
             attrs += ATTRIBUTES_SEPARATOR_STR + codec::END_OF_LINE;
     }
 
@@ -1382,19 +1511,21 @@ inline result_void mime::merge_attributes(attributes_t& attributes) const
         if (asterisk_pos != std::string::npos)
         {
             attr_name = full_attr_name.substr(0, asterisk_pos);
-            if (asterisk_pos < full_attr_name.length() - 1)
+            const auto tail = std::string_view(full_attr_name).substr(asterisk_pos + 1);
+            std::string_view digits = tail;
+            if (!digits.empty() && digits.back() == '*')
+                digits.remove_suffix(1);
+            if (!digits.empty())
             {
-                const auto part_view = std::string_view(full_attr_name).substr(asterisk_pos + 1, 1);
                 int part_value = 0;
-                auto [ptr, ec] = std::from_chars(part_view.data(), part_view.data() + part_view.size(), part_value);
-                if (ec == std::errc::invalid_argument || ptr != part_view.data() + part_view.size())
+                auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), part_value);
+                if (ec != std::errc{} || ptr != digits.data() + digits.size() || part_value < 0)
                     return fail_void(errc::mime_parse_error, "Parsing attribute name error.",
-                        "Attribute name is `" + attr_name + "`.");
-                if (ec == std::errc::result_out_of_range)
-                    return fail_void(errc::mime_parse_error, "Parsing attribute error.",
                         "Attribute name is `" + attr_name + "`.");
                 attr_part = part_value;
             }
+            else
+                attr_part = 0;
         }
         attribute_parts[attr_name][attr_part] = attr_value;
         attr = attributes.erase(attr);
@@ -1403,6 +1534,20 @@ inline result_void mime::merge_attributes(attributes_t& attributes) const
     for (auto attr = attribute_parts.begin(); attr != attribute_parts.end(); attr++)
     {
         std::string attr_name = attr->first;
+        if (attr->second.size() > 10)
+            return fail_void(errc::mime_parse_error, "Parsing attribute error.",
+                "Attribute name is `" + attr_name + "`.");
+        if (attr->second.size() > 1)
+        {
+            int expected = 0;
+            for (const auto& part : attr->second)
+            {
+                if (part.first != expected)
+                    return fail_void(errc::mime_parse_error, "Parsing attribute error.",
+                        "Attribute name is `" + attr_name + "`.");
+                ++expected;
+            }
+        }
         string_t attr_value;
         for (auto part = attr->second.begin(); part != attr->second.end(); part++)
         {
